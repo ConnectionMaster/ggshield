@@ -68,12 +68,17 @@ class GitLabWebUIOutputHandler(OutputHandler):
         for result in results:
             policy_breaks += result.scan.policy_breaks
 
-        if len(policy_breaks) == 1:
+        # Use a set to ensure we do not report duplicate incidents.
+        # (can happen when the secret is present in both the old and the new version of
+        # the document)
+        formatted_policy_breaks = {self.format_policy_break(x) for x in policy_breaks}
+
+        if len(formatted_policy_breaks) == 1:
             summary_str = "one incident"
         else:
-            summary_str = f"{len(policy_breaks)} incidents"
+            summary_str = f"{len(formatted_policy_breaks)} incidents"
+        breaks_str = ", ".join(formatted_policy_breaks)
 
-        breaks_str = ", ".join(self.format_policy_break(x) for x in policy_breaks)
         return (
             f"GL-HOOK-ERR: ggshield found {summary_str} in these changes: {breaks_str}."
             " The commit has been rejected."
