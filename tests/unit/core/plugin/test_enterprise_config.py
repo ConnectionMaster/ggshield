@@ -3,8 +3,6 @@
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from ggshield.core.config.enterprise_config import EnterpriseConfig, PluginConfig
 
 
@@ -58,12 +56,14 @@ class TestEnterpriseConfig:
         assert config.plugins["test-plugin"].enabled is True
         assert config.plugins["test-plugin"].version == "1.0.0"
 
-    def test_disable_plugin_missing_raises(self) -> None:
-        """Test disabling a missing plugin raises an error."""
+    def test_disable_plugin_missing_creates_config(self) -> None:
+        """Test disabling a missing plugin creates a disabled config entry."""
         config = EnterpriseConfig()
 
-        with pytest.raises(ValueError, match="not configured"):
-            config.disable_plugin("test-plugin")
+        config.disable_plugin("test-plugin")
+
+        assert "test-plugin" in config.plugins
+        assert config.plugins["test-plugin"].enabled is False
 
     def test_disable_existing_plugin(self) -> None:
         """Test disabling an already configured plugin."""
@@ -74,10 +74,10 @@ class TestEnterpriseConfig:
         assert config.plugins["test-plugin"].enabled is False
 
     def test_is_plugin_enabled_default(self) -> None:
-        """Test that plugins are disabled by default."""
+        """Test that plugins are disabled by default when not explicitly configured."""
         config = EnterpriseConfig()
 
-        # Plugin not in config should be considered disabled
+        # Plugin not in config should be considered disabled by default
         assert config.is_plugin_enabled("nonexistent") is False
 
     def test_is_plugin_enabled_explicit(self) -> None:
@@ -151,6 +151,46 @@ class TestEnterpriseConfig:
             assert "test-plugin" in loaded.plugins
             assert loaded.plugins["test-plugin"].enabled is True
             assert loaded.plugins["test-plugin"].version == "1.0.0"
+
+    def test_get_signature_mode_default(self) -> None:
+        """Test default signature mode is warn."""
+        config = EnterpriseConfig()
+
+        assert config.get_signature_mode() == SignatureVerificationMode.WARN
+
+    def test_get_signature_mode_warn(self) -> None:
+        """Test warn signature mode."""
+        config = EnterpriseConfig(plugin_signature_mode="warn")
+
+        assert config.get_signature_mode() == SignatureVerificationMode.WARN
+
+    def test_get_signature_mode_disabled(self) -> None:
+        """Test disabled signature mode."""
+        config = EnterpriseConfig(plugin_signature_mode="disabled")
+
+        assert config.get_signature_mode() == SignatureVerificationMode.DISABLED
+
+    def test_get_signature_mode_invalid_falls_back_to_strict(self) -> None:
+        """Test that invalid mode falls back to strict."""
+        config = EnterpriseConfig(plugin_signature_mode="invalid_value")
+
+        assert config.get_signature_mode() == SignatureVerificationMode.STRICT
+
+    def test_load_and_save_signature_mode(self, tmp_path: Path) -> None:
+        """Test that plugin_signature_mode is persisted."""
+        config_path = tmp_path / "enterprise_config.yaml"
+
+        with patch(
+            "ggshield.core.config.enterprise_config.get_enterprise_config_filepath"
+        ) as mock_path:
+            mock_path.return_value = config_path
+
+            config = EnterpriseConfig(plugin_signature_mode="warn")
+            config.save()
+
+            loaded = EnterpriseConfig.load()
+            assert loaded.plugin_signature_mode == "warn"
+            assert loaded.get_signature_mode() == SignatureVerificationMode.WARN
 
     def test_load_simple_format(self, tmp_path: Path) -> None:
         """Test loading config with simple boolean format."""

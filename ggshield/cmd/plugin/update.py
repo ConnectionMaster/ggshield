@@ -24,6 +24,7 @@ from ggshield.core.plugin.client import (
 )
 from ggshield.core.plugin.downloader import DownloadError, PluginDownloader
 from ggshield.core.plugin.loader import PluginLoader
+from ggshield.core.plugin.signature import SignatureVerificationMode
 from ggshield.core.text_utils import pluralize
 
 
@@ -60,6 +61,12 @@ def _is_newer_version(installed_version: str, candidate_version: str) -> bool:
     is_flag=True,
     help="Check for updates without installing",
 )
+@click.option(
+    "--allow-unsigned",
+    "allow_unsigned",
+    is_flag=True,
+    help="Allow updating plugins without valid signatures (overrides strict mode)",
+)
 @add_common_options()
 @click.pass_context
 def update_cmd(
@@ -67,6 +74,7 @@ def update_cmd(
     plugin_name: Optional[str],
     update_all: bool,
     check_only: bool,
+    allow_unsigned: bool,
     **kwargs: Any,
 ) -> None:
     """
@@ -97,8 +105,11 @@ def update_cmd(
     ctx_obj = ContextObj.get(ctx)
     config = ctx_obj.config
 
-    # Get installed plugins
+    # Get installed plugins and signature verification mode
     enterprise_config = EnterpriseConfig.load()
+    signature_mode = enterprise_config.get_signature_mode()
+    if allow_unsigned:
+        signature_mode = SignatureVerificationMode.WARN
     loader = PluginLoader(enterprise_config)
     downloader = PluginDownloader()
 
@@ -284,7 +295,9 @@ def update_cmd(
                 )
 
                 # Download and install (overwrites existing)
-                downloader.download_and_install(download_info, name)
+                downloader.download_and_install(
+                    download_info, name, signature_mode=signature_mode
+                )
                 updated = True
 
             elif source_type == PluginSourceType.GITHUB_RELEASE:
@@ -296,7 +309,9 @@ def update_cmd(
                         "Missing GitHub release metadata for plugin update"
                     )
 
-                downloader.download_from_github_release(download_url)
+                downloader.download_from_github_release(
+                    download_url, signature_mode=signature_mode
+                )
                 updated = True
 
             else:

@@ -4,10 +4,18 @@ Enterprise configuration - plugin settings.
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+
+if TYPE_CHECKING:
+    from ggshield.core.plugin.signature import SignatureVerificationMode
 
 from ggshield.core.config.utils import load_yaml_dict, save_yaml_dict
 from ggshield.core.dirs import get_config_dir
+
+
+_PLUGIN_SIGNATURE_MODE_KEY = "plugin_signature_mode"
+_DEFAULT_SIGNATURE_MODE = "warn"
 
 
 def get_enterprise_config_filepath() -> Path:
@@ -29,6 +37,7 @@ class EnterpriseConfig:
     """Enterprise configuration stored in ~/.config/ggshield/enterprise_config.yaml"""
 
     plugins: Dict[str, PluginConfig] = field(default_factory=dict)
+    plugin_signature_mode: str = _DEFAULT_SIGNATURE_MODE
 
     @classmethod
     def load(cls) -> "EnterpriseConfig":
@@ -54,7 +63,11 @@ class EnterpriseConfig:
             else:
                 plugins[name] = PluginConfig(enabled=True)
 
-        return cls(plugins=plugins)
+        plugin_signature_mode = data.get(
+            _PLUGIN_SIGNATURE_MODE_KEY, _DEFAULT_SIGNATURE_MODE
+        )
+
+        return cls(plugins=plugins, plugin_signature_mode=plugin_signature_mode)
 
     def save(self) -> None:
         """Save enterprise config to file."""
@@ -72,12 +85,23 @@ class EnterpriseConfig:
             }
         }
 
+        data[_PLUGIN_SIGNATURE_MODE_KEY] = self.plugin_signature_mode
+
         # Remove None values for cleaner YAML
         for plugin_data in data["plugins"].values():
             if plugin_data["version"] is None:
                 del plugin_data["version"]
 
         save_yaml_dict(data, config_path)
+
+    def get_signature_mode(self) -> "SignatureVerificationMode":
+        """Get the signature verification mode."""
+        from ggshield.core.plugin.signature import SignatureVerificationMode
+
+        try:
+            return SignatureVerificationMode(self.plugin_signature_mode)
+        except ValueError:
+            return SignatureVerificationMode.STRICT
 
     def enable_plugin(self, plugin_name: str, version: Optional[str] = None) -> None:
         """Enable a plugin."""
@@ -91,7 +115,8 @@ class EnterpriseConfig:
     def disable_plugin(self, plugin_name: str) -> None:
         """Disable a plugin."""
         if plugin_name not in self.plugins:
-            raise ValueError(f"Plugin '{plugin_name}' is not configured")
+            self.plugins[plugin_name] = PluginConfig(enabled=False)
+            return
 
         self.plugins[plugin_name].enabled = False
 
