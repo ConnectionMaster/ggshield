@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ggshield.core.config.enterprise_config import EnterpriseConfig, PluginConfig
+from ggshield.core.plugin.signature import SignatureVerificationMode
 
 
 class TestPluginConfig:
