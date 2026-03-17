@@ -108,3 +108,72 @@ def test_auto_ignore_cache_file(tmp_path):
 
         Cache()
         assert is_gitignored(Path(".cache_ggshield"))
+
+
+def test_no_duplicate_gitignore_entry(tmp_path):
+    """
+    GIVEN a cache file in a git repository where .cache_ggshield is already in .gitignore
+    WHEN Cache() is instantiated multiple times
+    THEN the .gitignore entry should not be duplicated
+    """
+    Repository.create(tmp_path)
+
+    with open(tmp_path / ".cache_ggshield", "w") as file:
+        json.dump({"last_found_secrets": [{"name": "", "match": "XXX"}]}, file)
+
+    with cd(str(tmp_path)):
+        # First instantiation adds the entry
+        Cache()
+        assert is_gitignored(Path(".cache_ggshield"))
+
+        gitignore_content_after_first = (tmp_path / ".gitignore").read_text()
+        count_first = gitignore_content_after_first.count(".cache_ggshield")
+
+        # Second instantiation should not add a duplicate
+        Cache()
+        gitignore_content_after_second = (tmp_path / ".gitignore").read_text()
+        count_second = gitignore_content_after_second.count(".cache_ggshield")
+
+        assert count_second == count_first, (
+            f"Expected {count_first} entries but found {count_second}. "
+            f".gitignore content:\n{gitignore_content_after_second}"
+        )
+
+
+def test_no_duplicate_gitignore_entry_tracked_file(tmp_path):
+    """
+    GIVEN a cache file that is tracked by git (git check-ignore returns not-ignored)
+          AND .cache_ggshield is already listed in .gitignore
+    WHEN Cache() is instantiated
+    THEN the .gitignore entry should not be duplicated
+    """
+    repo = Repository.create(tmp_path)
+
+    # Create and track .cache_ggshield
+    with open(tmp_path / ".cache_ggshield", "w") as file:
+        json.dump({"last_found_secrets": [{"name": "", "match": "XXX"}]}, file)
+    repo.add(".cache_ggshield")
+    repo.create_commit("add cache file")
+
+    # Add .cache_ggshield to .gitignore (but file is already tracked so git check-ignore
+    # will still say it's not ignored)
+    with open(tmp_path / ".gitignore", "a") as f:
+        f.write("\n# Added by ggshield\n.cache_ggshield\n")
+
+    with cd(str(tmp_path)):
+        # git check-ignore returns False for tracked files even if in .gitignore
+        assert not is_gitignored(Path(".cache_ggshield"))
+
+        gitignore_before = (tmp_path / ".gitignore").read_text()
+        count_before = gitignore_before.count(".cache_ggshield")
+
+        Cache()
+
+        gitignore_after = (tmp_path / ".gitignore").read_text()
+        count_after = gitignore_after.count(".cache_ggshield")
+
+        assert count_after == count_before, (
+            f"Expected {count_before} entries but found {count_after}. "
+            f"Duplicate entry added despite .cache_ggshield already being in .gitignore.\n"
+            f".gitignore content:\n{gitignore_after}"
+        )
