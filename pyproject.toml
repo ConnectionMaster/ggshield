@@ -58,7 +58,7 @@ Homepage = "https://github.com/GitGuardian/ggshield"
 ggshield = "ggshield.__main__:main"
 
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]

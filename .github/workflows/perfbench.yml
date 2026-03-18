@@ -39,7 +39,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --no-dev
+          uv sync --locked --no-dev
 
       - name: Setup benchmark
         run: |

@@ -807,6 +807,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "marshmallow" },
     { name = "marshmallow-dataclass" },
+    { name = "notify-py" },
     { name = "oauthlib" },
     { name = "packaging" },
     { name = "platformdirs" },
@@ -872,6 +873,7 @@ requires-dist = [
     { name = "cryptography", specifier = "~=43.0.1" },
     { name = "marshmallow", specifier = "~=3.18.0" },
     { name = "marshmallow-dataclass", specifier = "~=8.5.8" },
+    { name = "notify-py", specifier = ">=0.3.43" },
     { name = "oauthlib", specifier = "~=3.2.1" },
     { name = "packaging", specifier = ">=22.0" },
     { name = "platformdirs", specifier = "~=3.0.0" },
@@ -1116,7 +1118,7 @@ name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://gitlab.gitguardian.ovh/api/v4/projects/435/packages/pypi/simple" }
 dependencies = [
-    { name = "zipp" },
+    { name = "zipp", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/49/3b30cad09e7771a4982d9975a8cbf64f00d4a1ececb53297f1d9a7be1b10/importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb", size = 57107, upload-time = "2025-12-21T10:00:19.278Z" }
 wheels = [
@@ -1319,6 +1321,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jeepney"
+version = "0.9.0"
+source = { registry = "https://gitlab.gitguardian.ovh/api/v4/projects/435/packages/pypi/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/6f/357efd7602486741aa73ffc0617fb310a29b588ed0fd69c2399acbb85b0c/jeepney-0.9.0.tar.gz", hash = "sha256:cf0e9e845622b81e4a28df94c40345400256ec608d0e55bb8a3feaa9163f5732", size = 106758, upload-time = "2025-02-27T18:51:01.684Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b2/a3/e137168c9c44d18eff0376253da9f1e9234d0239e0ee230d2fee6cea8e55/jeepney-0.9.0-py3-none-any.whl", hash = "sha256:97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683", size = 49010, upload-time = "2025-02-27T18:51:00.104Z" },
+]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://gitlab.gitguardian.ovh/api/v4/projects/435/packages/pypi/simple" }
@@ -1379,6 +1390,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/74/a633ee74eb36c44aa6d1095e7cc5569bebf04342ee146178e2d36600708b/jsonschema_specifications-2025.9.1.tar.gz", hash = "sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d", size = 32855, upload-time = "2025-09-08T01:34:59.186Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/41/45/1a4ed80516f02155c51f51e8cedb3c1902296743db0bbc66608a0db2814f/jsonschema_specifications-2025.9.1-py3-none-any.whl", hash = "sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe", size = 18437, upload-time = "2025-09-08T01:34:57.871Z" },
+]
+
+[[package]]
+name = "loguru"
+version = "0.6.0"
+source = { registry = "https://gitlab.gitguardian.ovh/api/v4/projects/435/packages/pypi/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "win32-setctime", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/1f/d3818863e4be96bd641c4643c535a98f0fa2a12efa7c8ba35f763fa778ee/loguru-0.6.0.tar.gz", hash = "sha256:066bd06758d0a513e9836fd9c6b5a75bfb3fd36841f4b996bc60b547a309d41c", size = 123158, upload-time = "2022-01-29T13:47:31.879Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/21/e1d1da2586865a159fc73b611f36bdd50b6c4043cb6132d3d5e972988028/loguru-0.6.0-py3-none-any.whl", hash = "sha256:4e2414d534a2ab57573365b3e6d0234dfb1d84b68b7f3b948e6fb743860a77c3", size = 58317, upload-time = "2022-01-29T13:47:29.921Z" },
 ]
 
 [[package]]
@@ -1749,6 +1773,19 @@ source = { registry = "https://gitlab.gitguardian.ovh/api/v4/projects/435/packag
 sdist = { url = "https://files.pythonhosted.org/packages/24/bf/d1bda4f6168e0b2e9e5958945e01910052158313224ada5ce1fb2e1113b8/nodeenv-1.10.0.tar.gz", hash = "sha256:996c191ad80897d076bdfba80a41994c2b47c68e224c542b48feba42ba00f8bb", size = 55611, upload-time = "2025-12-20T14:08:54.006Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/b2/d0896bdcdc8d28a7fc5717c305f1a861c26e18c05047949fb371034d98bd/nodeenv-1.10.0-py2.py3-none-any.whl", hash = "sha256:5bb13e3eed2923615535339b3c620e76779af4cb4c6a90deccc9e36b274d3827", size = 23438, upload-time = "2025-12-20T14:08:52.782Z" },
+]
+
+[[package]]
+name = "notify-py"
+version = "0.3.43"
+source = { registry = "https://gitlab.gitguardian.ovh/api/v4/projects/435/packages/pypi/simple" }
+dependencies = [
+    { name = "jeepney", marker = "sys_platform == 'linux'" },
+    { name = "loguru" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/06/2b/fc68aeed5108185922c5469484e15c192dff01d61eddfab0c1c256e4f54c/notify_py-0.3.43.tar.gz", hash = "sha256:16ee146d48f16bae5dad233db66014a387efd2c6ed2c4caf1e08aef432070513", size = 648145, upload-time = "2024-06-05T14:40:38.487Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/b4/649f16520ed0a64c275861dcaf9c1291d079f742aa2bf9102fdd168e4197/notify_py-0.3.43-py3-none-any.whl", hash = "sha256:90da686b480bf05d033b21fb5118662bb7a4c68e68cb21d93a048ca7b867f9b4", size = 649803, upload-time = "2024-06-05T14:40:36.733Z" },
 ]
 
 [[package]]
@@ -3163,6 +3200,15 @@ source = { registry = "https://gitlab.gitguardian.ovh/api/v4/projects/435/packag
 sdist = { url = "https://files.pythonhosted.org/packages/38/be/726dab762b770d0417e505c58e26d661aac1ec0c831e483cda4817ca2417/wheel_filename-1.4.2.tar.gz", hash = "sha256:87891c465dcbb40b40394a906f01a93214bdd51aa5d25e3a9a59cae62bc298fd", size = 7911, upload-time = "2024-12-01T13:03:16.012Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b4/0f/6e97a3bc38cdde32e3ec49f8c0903fe3559ec9ec9db181782f0bb4417717/wheel_filename-1.4.2-py3-none-any.whl", hash = "sha256:3fa599046443d4ca830d06e3d180cd0a675d5871af0a68daa5623318bb4d17e3", size = 6195, upload-time = "2024-12-01T13:03:00.536Z" },
+]
+
+[[package]]
+name = "win32-setctime"
+version = "1.2.0"
+source = { registry = "https://gitlab.gitguardian.ovh/api/v4/projects/435/packages/pypi/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
 ]
 
 [[package]]
