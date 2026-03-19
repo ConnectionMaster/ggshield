@@ -33,10 +33,14 @@ class Tool(Enum):
 class Result:
     """Result of a scan: allow or not."""
 
-    event_type: EventType
     block: bool
     message: str
     nbr_secrets: int
+    payload: "Payload"
+
+    @classmethod
+    def allow(cls, payload: "Payload") -> "Result":
+        return cls(block=False, message="", nbr_secrets=0, payload=payload)
 
 
 class Flavor:

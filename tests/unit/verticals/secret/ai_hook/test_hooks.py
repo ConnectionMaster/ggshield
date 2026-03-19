@@ -1,7 +1,7 @@
 import json
 from collections import Counter
 from pathlib import Path
-from typing import List
+from typing import List, Set
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,7 +14,7 @@ from ggshield.verticals.secret.ai_hook.cursor import Cursor
 from ggshield.verticals.secret.ai_hook.models import EventType, Flavor, Payload
 from ggshield.verticals.secret.ai_hook.models import Result as HookResult
 from ggshield.verticals.secret.ai_hook.models import Tool
-from ggshield.verticals.secret.ai_hook.scanner import AIHookScanner
+from ggshield.verticals.secret.ai_hook.scanner import AIHookScanner, find_filepaths
 from ggshield.verticals.secret.secret_scan_collection import Result as ScanResult
 from ggshield.verticals.secret.secret_scan_collection import Results, Secret
 
@@ -59,6 +59,16 @@ def _make_secret(match_str: str = "***"):
         vault_name=None,
         vault_path=None,
         vault_path_count=None,
+    )
+
+
+def _dummy_payload(event_type: EventType = EventType.OTHER) -> Payload:
+    return Payload(
+        event_type=event_type,
+        tool=None,
+        content="",
+        identifier="",
+        flavor=Flavor(),
     )
 
 
@@ -110,7 +120,7 @@ class TestAIHookScannerParseInput:
             "user_email": "user@example.com",
             "transcript_path": "/home/user1/.cursor/projects/foo/agent-transcripts/75fed8a8/75fed8a8.jsonl",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.USER_PROMPT
         assert payload.content == "hello world"
         assert payload.tool is None
@@ -136,7 +146,7 @@ class TestAIHookScannerParseInput:
             "workspace_roots": ["/home/user1/foo"],
             "transcript_path": "/home/user1/.cursor/projects/foo/agent-transcripts/37a17cfc/37a17cfc.jsonl",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.BASH
         assert payload.content == "whoami"
@@ -158,11 +168,10 @@ class TestAIHookScannerParseInput:
             "workspace_roots": ["/home/user1/foo"],
             "transcript_path": "/home/user1/.cursor/projects/foo/agent-transcripts/75fed8a8/75fed8a8.jsonl",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.READ
         assert payload.identifier == tmp_file.as_posix()
-        # The content of the file has been read
         assert payload.content == "this is the content"
         assert isinstance(payload.flavor, Cursor)
 
@@ -183,7 +192,7 @@ class TestAIHookScannerParseInput:
             "workspace_roots": ["/home/user1/foo"],
             "transcript_path": "/home/user/.cursor/projects/foo/agent-transcripts/37a17cfc/37a17cfc.jsonl",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.POST_TOOL_USE
         assert payload.tool == Tool.BASH
         assert "user1" in payload.content
@@ -200,7 +209,7 @@ class TestAIHookScannerParseInput:
             "hook_event_name": "UserPromptSubmit",
             "prompt": "hello world",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.USER_PROMPT
         assert payload.content == "hello world"
         assert payload.tool is None
@@ -222,7 +231,7 @@ class TestAIHookScannerParseInput:
             },
             "tool_use_id": "toolu_01BPMKeZAMCqBtn1xJRNfDJw",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.BASH
         assert "whoami" in payload.content
@@ -242,7 +251,7 @@ class TestAIHookScannerParseInput:
             "tool_input": {"file_path": tmp_file.as_posix()},
             "tool_use_id": "toolu_01WabtWJpzf1ZJ8GJ3JfQEmq",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.READ
         assert payload.identifier == tmp_file.as_posix()
@@ -273,11 +282,37 @@ class TestAIHookScannerParseInput:
             },
             "tool_use_id": "toolu_01BPMKeZAMCqBtn1xJRNfDJw",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.POST_TOOL_USE
         assert payload.tool == Tool.BASH
         # Content is json.dumps(tool_response), so the stdout is inside the string
         assert "user1" in payload.content
+        assert isinstance(payload.flavor, Claude)
+
+    def test_claude_parse_read_files_in_prompt(self):
+        """Test parsing "@file_path" mentions from Claude Code prompt."""
+        scanner = AIHookScanner(_mock_scanner([]))
+        data = {
+            "session_id": "273ad859-3608-4799-9971-fa15ecb1a65c",
+            "transcript_path": "/home/user1/.claude/projects/foo/273ad859-3608-4799-9971-fa15ecb1a65c.jsonl",
+            "cwd": "/home/user1/foo",
+            "permission_mode": "default",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "read @folder/file.txt and summarize the content.",
+        }
+        payloads = scanner._parse_input(json.dumps(data))
+        assert len(payloads) == 2
+        payload = payloads[0]
+        assert payload.event_type == EventType.PRE_TOOL_USE
+        assert payload.tool == Tool.READ
+        assert payload.identifier == "folder/file.txt"
+        assert payload.content == ""  # empty because inexistent file
+        assert isinstance(payload.flavor, Claude)
+
+        payload = payloads[1]
+        assert payload.event_type == EventType.USER_PROMPT
+        assert payload.content == "read @folder/file.txt and summarize the content."
+        assert payload.tool is None
         assert isinstance(payload.flavor, Claude)
 
     def test_copilot_user_prompt(self):
@@ -294,7 +329,7 @@ class TestAIHookScannerParseInput:
             "prompt": "hello world",
             "cwd": "/home/user1/foo",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.USER_PROMPT
         assert "hello world" in payload.content
         assert payload.tool is None
@@ -323,7 +358,7 @@ class TestAIHookScannerParseInput:
             "tool_use_id": "call_ADJcoVxpnzPtpU6uf0h9wzLR__vscode-1772105116075",
             "cwd": "/home/user1/foo",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.BASH
         assert "whoami" in payload.content
@@ -350,7 +385,7 @@ class TestAIHookScannerParseInput:
             "tool_use_id": "call_iMFuTGETQ2z23a3xYTqcHBXp__vscode-1772105116078",
             "cwd": "/home/user1/foo",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.READ
         assert payload.identifier == tmp_file.as_posix()
@@ -381,7 +416,7 @@ class TestAIHookScannerParseInput:
             "tool_use_id": "call_f96KUoNCGS8jENVKnlWnSz5Q__vscode-1772105116077",
             "cwd": "/home/user1/foo",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.POST_TOOL_USE
         assert payload.tool == Tool.BASH
         assert "user1" in payload.content
@@ -397,7 +432,7 @@ class TestAIHookScannerParseInput:
                 "tool_input": {"file_path": "/nonexistent/path"},
             }
         )
-        payload = scanner._parse_input(content)
+        payload = scanner._parse_input(content)[0]
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.READ
         assert payload.identifier == "/nonexistent/path"
@@ -411,7 +446,7 @@ class TestAIHookScannerParseInput:
             "tool_name": "SomeUnknownTool",
             "tool_input": {"arg": "value"},
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.OTHER
         assert payload.content == ""
@@ -423,7 +458,7 @@ class TestAIHookScannerParseInput:
             "hook_event_name": "SomeOtherEvent",
             "prompt": "hello",
         }
-        payload = scanner._parse_input(json.dumps(data))
+        payload = scanner._parse_input(json.dumps(data))[0]
         assert payload.event_type == EventType.OTHER
         assert payload.content == ""
         assert payload.tool is None
@@ -476,12 +511,7 @@ class TestFlavorOutputResult:
     @patch("ggshield.verticals.secret.ai_hook.cursor.click.echo")
     def test_cursor_output_result_user_prompt_allow(self, mock_echo: MagicMock):
         """Cursor USER_PROMPT with block=False: JSON to stdout, return 0."""
-        result = HookResult(
-            event_type=EventType.USER_PROMPT,
-            block=False,
-            message="",
-            nbr_secrets=0,
-        )
+        result = HookResult.allow(_dummy_payload(EventType.USER_PROMPT))
         code = Cursor().output_result(result)
         assert code == 0
         mock_echo.assert_called_once()
@@ -495,10 +525,10 @@ class TestFlavorOutputResult:
     def test_cursor_output_result_user_prompt_block(self, mock_echo: MagicMock):
         """Cursor USER_PROMPT with block=True: JSON to stdout, return 0."""
         result = HookResult(
-            event_type=EventType.USER_PROMPT,
             block=True,
             message="Remove secrets from prompt",
             nbr_secrets=1,
+            payload=_dummy_payload(EventType.USER_PROMPT),
         )
         code = Cursor().output_result(result)
         assert code == 0
@@ -512,12 +542,7 @@ class TestFlavorOutputResult:
     @patch("ggshield.verticals.secret.ai_hook.cursor.click.echo")
     def test_cursor_output_result_pre_tool_use_allow(self, mock_echo: MagicMock):
         """Cursor PRE_TOOL_USE with block=False: permission allow, return 0."""
-        result = HookResult(
-            event_type=EventType.PRE_TOOL_USE,
-            block=False,
-            message="",
-            nbr_secrets=0,
-        )
+        result = HookResult.allow(_dummy_payload(EventType.PRE_TOOL_USE))
         code = Cursor().output_result(result)
         assert code == 0
         mock_echo.assert_called_once()
@@ -531,10 +556,10 @@ class TestFlavorOutputResult:
     def test_cursor_output_result_pre_tool_use_block(self, mock_echo: MagicMock):
         """Cursor PRE_TOOL_USE with block=True: permission deny, return 0."""
         result = HookResult(
-            event_type=EventType.PRE_TOOL_USE,
             block=True,
             message="Secrets detected in command",
             nbr_secrets=1,
+            payload=_dummy_payload(EventType.PRE_TOOL_USE),
         )
         code = Cursor().output_result(result)
         assert code == 0
@@ -550,10 +575,10 @@ class TestFlavorOutputResult:
     def test_cursor_output_result_post_tool_use(self, mock_echo: MagicMock):
         """Cursor POST_TOOL_USE: empty JSON to stdout, return 0."""
         result = HookResult(
-            event_type=EventType.POST_TOOL_USE,
             block=True,
             message="Too late",
             nbr_secrets=1,
+            payload=_dummy_payload(EventType.POST_TOOL_USE),
         )
         code = Cursor().output_result(result)
         assert code == 0
@@ -566,10 +591,10 @@ class TestFlavorOutputResult:
     def test_cursor_output_result_other_block(self, mock_echo: MagicMock):
         """Cursor OTHER event with block: empty JSON, return 2."""
         result = HookResult(
-            event_type=EventType.OTHER,
             block=True,
             message="",
             nbr_secrets=1,
+            payload=_dummy_payload(EventType.OTHER),
         )
         code = Cursor().output_result(result)
         assert code == 2
@@ -578,12 +603,7 @@ class TestFlavorOutputResult:
     @patch("ggshield.verticals.secret.ai_hook.cursor.click.echo")
     def test_cursor_output_result_other_allow(self, mock_echo: MagicMock):
         """Cursor OTHER event without block: empty JSON, return 0."""
-        result = HookResult(
-            event_type=EventType.OTHER,
-            block=False,
-            message="",
-            nbr_secrets=0,
-        )
+        result = HookResult.allow(_dummy_payload(EventType.OTHER))
         code = Cursor().output_result(result)
         assert code == 0
         mock_echo.assert_called_once_with("{}")
@@ -591,12 +611,7 @@ class TestFlavorOutputResult:
     @patch("ggshield.verticals.secret.ai_hook.claude_code.click.echo")
     def test_claude_output_result_allow(self, mock_echo: MagicMock):
         """Claude with block=False: JSON continue true to stdout, return 0."""
-        result = HookResult(
-            event_type=EventType.USER_PROMPT,
-            block=False,
-            message="",
-            nbr_secrets=0,
-        )
+        result = HookResult.allow(_dummy_payload(EventType.USER_PROMPT))
         code = Claude().output_result(result)
         assert code == 0
         mock_echo.assert_called_once()
@@ -610,10 +625,10 @@ class TestFlavorOutputResult:
     def test_claude_output_result_block(self, mock_echo: MagicMock):
         """Claude with block=True: JSON continue false and stopReason to stdout, return 0."""
         result = HookResult(
-            event_type=EventType.PRE_TOOL_USE,
             block=True,
             message="Secrets in file",
             nbr_secrets=1,
+            payload=_dummy_payload(EventType.PRE_TOOL_USE),
         )
         code = Claude().output_result(result)
         assert code == 0
@@ -627,12 +642,7 @@ class TestFlavorOutputResult:
     @patch("ggshield.verticals.secret.ai_hook.claude_code.click.echo")
     def test_copilot_output_result_allow(self, mock_echo: MagicMock):
         """Copilot with block=False: same as Claude, JSON to stdout, return 0."""
-        result = HookResult(
-            event_type=EventType.USER_PROMPT,
-            block=False,
-            message="",
-            nbr_secrets=0,
-        )
+        result = HookResult.allow(_dummy_payload(EventType.USER_PROMPT))
         code = Copilot().output_result(result)
         assert code == 0
         mock_echo.assert_called_once()
@@ -646,10 +656,10 @@ class TestFlavorOutputResult:
     def test_copilot_output_result_block(self, mock_echo: MagicMock):
         """Copilot with block=True: same as Claude, JSON to stdout, return 0."""
         result = HookResult(
-            event_type=EventType.POST_TOOL_USE,
             block=True,
             message="Secret in tool output",
             nbr_secrets=1,
+            payload=_dummy_payload(EventType.POST_TOOL_USE),
         )
         code = Copilot().output_result(result)
         assert code == 0
@@ -667,12 +677,7 @@ class TestBaseFlavor:
     @patch("ggshield.verticals.secret.ai_hook.models.click.echo")
     def test_base_flavor_output_result_allow(self, mock_echo: MagicMock):
         """Base Flavor with block=False: prints allow message, returns 0."""
-        result = HookResult(
-            event_type=EventType.USER_PROMPT,
-            block=False,
-            message="",
-            nbr_secrets=0,
-        )
+        result = HookResult.allow(_dummy_payload(EventType.USER_PROMPT))
         code = Flavor().output_result(result)
         assert code == 0
         mock_echo.assert_called_once_with("No secrets found. Good to go.")
@@ -681,10 +686,10 @@ class TestBaseFlavor:
     def test_base_flavor_output_result_block(self, mock_echo: MagicMock):
         """Base Flavor with block=True: prints message to stderr, returns 2."""
         result = HookResult(
-            event_type=EventType.PRE_TOOL_USE,
             block=True,
             message="Secrets found",
             nbr_secrets=1,
+            payload=_dummy_payload(EventType.PRE_TOOL_USE),
         )
         code = Flavor().output_result(result)
         assert code == 2
@@ -852,3 +857,54 @@ class TestSendSecretNotification:
         instance = mock_notify_cls.return_value
         assert "using a tool" in instance.message
         instance.send.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "prompt, filepaths",
+    [
+        ("read @folder/file.txt and summarize the content.", {"folder/file.txt"}),
+        (
+            "A multi-lineprompt with @file1 \n and @file2 \n and @file3 read.",
+            {"file1", "file2", "file3"},
+        ),
+        ("@filename.txt", {"filename.txt"}),
+        ("same @file @file twice", {"file"}),
+        ("File can start with a dot: @.env", {".env"}),
+        (
+            "Files simply mentioned without @ prefix are not matched: foo.txt bar.txt.",
+            set(),
+        ),
+        ("emails like foo@example.com are not matched.", set()),
+        (
+            "test @file.multiple.extensions.txt and @file2.txt",
+            {"file.multiple.extensions.txt", "file2.txt"},
+        ),
+        ("files (@folder/foo.txt) can be between parentheses.", {"folder/foo.txt"}),
+        ("files @can-contain-hyphens.txt", {"can-contain-hyphens.txt"}),
+        (
+            'Supports @"file with spaces (and comma, and parentheses) in name".',
+            {"file with spaces (and comma, and parentheses) in name"},
+        ),
+        ('read @"file with \\" in its name.txt"', {'file with \\" in its name.txt'}),
+        (
+            "Path at the end of a sentence: @file.txt. Another one: @file2.txt.",
+            {"file.txt", "file2.txt"},
+        ),
+        # Edge cases and extra coverage
+        ("@ alone or at end: hello @", set()),
+        ("@ only: @", set()),
+        ('Empty quoted path: @""', set()),
+        ("Unquoted path with comma: @a.txt, and @b.txt", {"a.txt", "b.txt"}),
+        ("Unquoted path with semicolon: @x; @y", {"x", "y"}),
+        ("Paths with underscores: @my_special_file.txt", {"my_special_file.txt"}),
+        ("Windows-style path: read @src\\main.py", {"src\\main.py"}),
+        (
+            'Mixed quoted and unquoted: @config.json and @"big file.txt"',
+            {"config.json", "big file.txt"},
+        ),
+        ("Newline before @: line1\n@file.txt", {"file.txt"}),
+    ],
+)
+def test_find_filepaths(prompt: str, filepaths: Set[str]):
+    """Test filepath regex."""
+    assert find_filepaths(prompt) == filepaths, prompt
