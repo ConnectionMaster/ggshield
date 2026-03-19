@@ -172,7 +172,8 @@ class TestAIHookScannerParseInput:
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.READ
         assert payload.identifier == tmp_file.as_posix()
-        assert payload.content == "this is the content"
+        assert payload.content == ""
+        assert payload.scannable.content == "this is the content"
         assert isinstance(payload.flavor, Cursor)
 
     def test_cursor_post_tool_use_shell(self):
@@ -255,7 +256,8 @@ class TestAIHookScannerParseInput:
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.READ
         assert payload.identifier == tmp_file.as_posix()
-        assert payload.content == "this is the content"
+        assert payload.content == ""
+        assert payload.scannable.content == "this is the content"
         assert isinstance(payload.flavor, Claude)
 
     def test_claude_post_tool_use_bash(self):
@@ -389,7 +391,8 @@ class TestAIHookScannerParseInput:
         assert payload.event_type == EventType.PRE_TOOL_USE
         assert payload.tool == Tool.READ
         assert payload.identifier == tmp_file.as_posix()
-        assert payload.content == "this is the content"
+        assert payload.content == ""
+        assert payload.scannable.content == "this is the content"
         assert isinstance(payload.flavor, Copilot)
 
     def test_copilot_post_tool_use_run_in_terminal(self):
@@ -770,6 +773,12 @@ class TestAIHookScannerScan:
         code = scanner.scan(json.dumps(data))
         assert code == 0
         mock_scanner.scan.assert_not_called()
+
+    def test_scan_payloads_refuse_empty_list(self):
+        """scan() with empty list of payloads raises ValueError."""
+        scanner = AIHookScanner(_mock_scanner([]))
+        with pytest.raises(ValueError):
+            scanner._scan_payloads([])
 
 
 class TestMessageFromSecrets:

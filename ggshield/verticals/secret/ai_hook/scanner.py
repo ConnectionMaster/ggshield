@@ -1,13 +1,11 @@
 import hashlib
 import json
 import re
-from pathlib import Path
 from typing import Any, Dict, List, Sequence, Set
 
 from notifypy import Notify
 
 from ggshield.core.filter import censor_match
-from ggshield.core.scan import StringScannable
 from ggshield.core.scanner_ui import create_message_only_scanner_ui
 from ggshield.core.text_utils import pluralize, translate_validity
 from ggshield.verticals.secret import SecretScanner
@@ -16,7 +14,7 @@ from ggshield.verticals.secret.secret_scan_collection import Secret
 
 from .claude_code import Claude
 from .cursor import Cursor
-from .models import MAX_READ_SIZE, EventType, Flavor, Payload, Result, Tool
+from .models import EventType, Flavor, Payload, Result, Tool
 
 
 # Regex (and method) to look for any @file_path in the prompt.
@@ -24,7 +22,7 @@ from .models import MAX_READ_SIZE, EventType, Flavor, Payload, Result, Tool
 _FILE_PATH_REGEX = re.compile(
     r'@"((?:[^"\\]|\\.)*)"'  # quoted: @"..."
     r"|"
-    r"(?:\W|^)@([\w/\\\-\.]+)",  # unquoted: @path
+    r"(?:\W|^)@([\w/\\.-]+)",  # unquoted: @path
     re.MULTILINE,
 )
 
@@ -77,7 +75,7 @@ class AIHookScanner:
 
         return payload.flavor.output_result(result)
 
-    def _parse_input(self, content: str) -> list[Payload]:
+    def _parse_input(self, raw_content: str) -> list[Payload]:
         """Parse the input content. Raises a ValueError if the input is not valid.
 
         Returns:
@@ -87,10 +85,10 @@ class AIHookScanner:
             So we need to handle this case ourselves.
         """
         # Parse the content as JSON
-        if not content.strip():
+        if not raw_content.strip():
             raise ValueError("Error: No input received on stdin")
         try:
-            data = json.loads(content)
+            data = json.loads(raw_content)
         except json.JSONDecodeError as e:
             raise ValueError(f"Error: Failed to parse JSON from stdin: {e}") from e
 
@@ -125,9 +123,8 @@ class AIHookScanner:
                 content = tool_input.get("command", "")
                 identifier = content
             elif tool == Tool.READ:
+                # We only need to deal with the identifier, the content will be read by the Scannable
                 identifier = lookup(tool_input, ["file_path", "filePath"], "")
-                # Read the file before the AI tool
-                content = self._read_file(identifier)
 
         elif event_type == EventType.POST_TOOL_USE:
             tool_name = data.get("tool_name", "").lower()
@@ -139,7 +136,7 @@ class AIHookScanner:
 
         # If identifier was not set, hash the content
         if not identifier:
-            identifier = hashlib.sha256(content.encode()).hexdigest()
+            identifier = hashlib.sha256((content or "").encode()).hexdigest()
 
         payloads.append(
             Payload(
@@ -151,17 +148,6 @@ class AIHookScanner:
             )
         )
         return payloads
-
-    @staticmethod
-    def _read_file(file_path: str) -> str:
-        """Read the file and return its content or an empty string."""
-        file = Path(file_path)
-        if file.is_file() and file.stat().st_size <= MAX_READ_SIZE:
-            try:
-                return file.read_text()
-            except (UnicodeDecodeError, OSError):
-                pass
-        return ""
 
     def _scan_payloads(self, payloads: List[Payload]) -> Result:
         """Scan payloads for secrets using the SecretScanner.
@@ -184,13 +170,11 @@ class AIHookScanner:
     ) -> Result:
         """Scan content for secrets using the SecretScanner."""
         # Short path: if there is no content, no need to do an API call
-        if not payload.content:
+        if payload.empty:
             return Result.allow(payload)
 
-        scannable = StringScannable(url=payload.identifier, content=payload.content)
-
         with create_message_only_scanner_ui() as scanner_ui:
-            results = self.scanner.scan([scannable], scanner_ui=scanner_ui)
+            results = self.scanner.scan([payload.scannable], scanner_ui=scanner_ui)
         # Collect all secrets from results
         secrets: List[Secret] = []
         for result in results.results:
@@ -242,7 +226,7 @@ class AIHookScanner:
                     Payload(
                         event_type=EventType.PRE_TOOL_USE,
                         tool=Tool.READ,
-                        content=self._read_file(match),
+                        content="",
                         identifier=match,
                         flavor=flavor,
                     )
