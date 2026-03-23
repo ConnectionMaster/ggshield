@@ -516,16 +516,17 @@ def gitignore(path: Path):
     repo_root = _git_rev_parse(option="--show-toplevel", wd=working_dir)
     if repo_root is not None:
         gitignore_path = Path(repo_root) / ".gitignore"
+        posix_path = path.as_posix()
         try:
             # Check if the entry already exists in .gitignore
             if gitignore_path.is_file():
                 existing_content = gitignore_path.read_text(encoding="utf-8")
                 for line in existing_content.splitlines():
-                    if line.strip() == path.as_posix():
+                    if line.strip() == posix_path:
                         return
             with open(gitignore_path, "a") as f:
                 f.write("\n# Added by ggshield\n")
-                f.write(path.as_posix() + "\n")
+                f.write(posix_path + "\n")
         except OSError:
             logger.debug(
                 "Failed to add %s to .gitignore in %s",
