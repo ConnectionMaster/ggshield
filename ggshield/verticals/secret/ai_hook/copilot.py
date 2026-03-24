@@ -1,11 +1,10 @@
 import json
 from pathlib import Path
-from typing import Any
 
 import click
 
 from .claude_code import Claude
-from .models import Result
+from .models import EventType, Result
 
 
 class Copilot(Claude):
@@ -17,12 +16,22 @@ class Copilot(Claude):
     name = "Copilot"
 
     def output_result(self, result: Result) -> int:
-        response: dict[str, Any] = {
-            "continue": not result.block,
-        }
+        response = {}
         if result.block:
-            # Having stopReason blocks Copilot, whether continue is true or false.
-            response["stopReason"] = result.message
+            if result.payload.event_type == EventType.PRE_TOOL_USE:
+                response["hookSpecificOutput"] = {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": result.message,
+                }
+            elif result.payload.event_type == EventType.POST_TOOL_USE:
+                response["decision"] = "block"
+                response["reason"] = result.message
+            else:
+                response["continue"] = False
+                response["stopReason"] = result.message
+        else:
+            response["continue"] = True
 
         click.echo(json.dumps(response))
         return 0

@@ -65,13 +65,11 @@ class AIHookScanner:
         result = self._scan_payloads(payloads)
         payload = result.payload
 
-        # Special case: in post-tool use, the action is already done, we can only notify the user
+        # Special case: in post-tool use, the action is already done: at least notify the user
         if result.block and payload.event_type == EventType.POST_TOOL_USE:
-            # Too late, but at least notify the user
             self._send_secret_notification(
                 result.nbr_secrets, payload.tool or Tool.OTHER, payload.flavor.name
             )
-            return payload.flavor.output_result(Result.allow(payload))
 
         return payload.flavor.output_result(result)
 
@@ -112,7 +110,7 @@ class AIHookScanner:
             content = data.get("prompt", "")
             # Look for files mentioned in the prompt that could be read
             # without triggering a PRE_TOOL_USE event.
-            payloads.extend(self._parse_user_prompt(content, flavor))
+            payloads.extend(self._parse_user_prompt(content, event_type, flavor))
 
         elif event_type == EventType.PRE_TOOL_USE:
             tool_name = data.get("tool_name", "").lower()
@@ -209,7 +207,9 @@ class AIHookScanner:
             # Fallback that respect base conventions
             return Flavor()
 
-    def _parse_user_prompt(self, content: str, flavor: Flavor) -> List[Payload]:
+    def _parse_user_prompt(
+        self, content: str, event_type: EventType, flavor: Flavor
+    ) -> List[Payload]:
         """Parse the user prompt for additional payloads that we may miss."""
         payloads = []
         # Scenario 1 (the only one we know about so far):
@@ -224,7 +224,7 @@ class AIHookScanner:
             for match in matches:
                 payloads.append(
                     Payload(
-                        event_type=EventType.PRE_TOOL_USE,
+                        event_type=event_type,
                         tool=Tool.READ,
                         content="",
                         identifier=match,
@@ -266,10 +266,13 @@ class AIHookScanner:
         if payload.event_type == EventType.USER_PROMPT:
             message = "Please remove the secrets from your prompt before submitting."
         elif payload.tool == Tool.BASH:
-            message = (
-                "Please remove the secrets from the command before executing it. "
-                "Consider using environment variables or a secrets manager instead."
-            )
+            if payload.event_type == EventType.POST_TOOL_USE:
+                message = "Secrets detected in the command output."
+            else:
+                message = (
+                    "Please remove the secrets from the command before executing it. "
+                    "Consider using environment variables or a secrets manager instead."
+                )
         elif payload.tool == Tool.READ:
             message = (
                 "Please remove the secrets from the file content before reading it."
