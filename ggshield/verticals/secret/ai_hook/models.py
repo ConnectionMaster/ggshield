@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Optional
 
 import click
 
+from ggshield.core.scan import File, Scannable, StringScannable
+from ggshield.utils.files import is_path_binary
+
 
 MAX_READ_SIZE = 1024 * 1024 * 50  # We restrict payloads read to 50MB
 
@@ -33,10 +36,14 @@ class Tool(Enum):
 class Result:
     """Result of a scan: allow or not."""
 
-    event_type: EventType
     block: bool
     message: str
     nbr_secrets: int
+    payload: "Payload"
+
+    @classmethod
+    def allow(cls, payload: "Payload") -> "Result":
+        return cls(block=False, message="", nbr_secrets=0, payload=payload)
 
 
 class Flavor:
@@ -104,3 +111,17 @@ class Payload:
     content: str
     identifier: str
     flavor: Flavor
+
+    @property
+    def scannable(self) -> Scannable:
+        """Return the appropriate Scannable for the payload."""
+        if self.tool == Tool.READ:
+            path = Path(self.identifier)
+            if path.is_file() and not is_path_binary(path):
+                return File(path=self.identifier)
+        return StringScannable(url=self.identifier, content=self.content)
+
+    @property
+    def empty(self) -> bool:
+        """Return True if the payload is empty."""
+        return not self.scannable.is_longer_than(0)

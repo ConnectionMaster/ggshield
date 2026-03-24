@@ -14,16 +14,16 @@ class Cursor(Flavor):
 
     def output_result(self, result: Result) -> int:
         response = {}
-        if result.event_type == EventType.USER_PROMPT:
+        if result.payload.event_type == EventType.USER_PROMPT:
             response["continue"] = not result.block
             response["user_message"] = result.message
-        elif result.event_type == EventType.PRE_TOOL_USE:
+        elif result.payload.event_type == EventType.PRE_TOOL_USE:
             # The documentation says "decision", but sometimes mentions "permission".
             # After some testing it seems that "permission" is the correct one but let's keep both for now.
             response["permission"] = "deny" if result.block else "allow"
             response["decision"] = response["permission"]
             response["reason"] = result.message
-        elif result.event_type == EventType.POST_TOOL_USE:
+        elif result.payload.event_type == EventType.POST_TOOL_USE:
             pass  # Nothing to do here
         else:
             # Should not happen, but just in case
