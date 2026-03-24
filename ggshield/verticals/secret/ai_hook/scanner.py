@@ -78,9 +78,8 @@ class AIHookScanner:
 
         Returns:
             A list of payloads. Most of the time the list will contain only one payload,
-            but in some cases ("@" mention of files in Claude Code being the only known case so far)
-            files mentioned in the prompt will be read but the PreToolUse event will not be called.
-            So we need to handle this case ourselves.
+            but in some cases files mentioned in the prompt will be read but the
+            PreToolUse event will not be called. So we need to handle this case ourselves.
         """
         # Parse the content as JSON
         if not raw_content.strip():
@@ -213,24 +212,19 @@ class AIHookScanner:
         """Parse the user prompt for additional payloads that we may miss."""
         payloads = []
         # Scenario 1 (the only one we know about so far):
-        # Claude Code doesn't always trigger a PRE_TOOL_USE event when
-        # a file is mentioned in the prompt with an "@" prefix.
-        # We restrict this to Claude Code as other assistants will trigger
-        # another hook event for the file later and and we don't want to
-        # unnecessarily scan files multiple times.
-        if isinstance(flavor, Claude):
-            # match multiple @file_path in the prompt
-            matches = find_filepaths(content)
-            for match in matches:
-                payloads.append(
-                    Payload(
-                        event_type=event_type,
-                        tool=Tool.READ,
-                        content="",
-                        identifier=match,
-                        flavor=flavor,
-                    )
+        # Code assistants don't always trigger a PRE_TOOL_USE event when
+        # a file is mentioned in the prompt, especially with an "@" prefix.
+        matches = find_filepaths(content)
+        for match in matches:
+            payloads.append(
+                Payload(
+                    event_type=event_type,
+                    tool=Tool.READ,
+                    content="",
+                    identifier=match,
+                    flavor=flavor,
                 )
+            )
         return payloads
 
     @staticmethod
