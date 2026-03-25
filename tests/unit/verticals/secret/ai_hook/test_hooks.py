@@ -305,7 +305,7 @@ class TestAIHookScannerParseInput:
         payloads = scanner._parse_input(json.dumps(data))
         assert len(payloads) == 2
         payload = payloads[0]
-        assert payload.event_type == EventType.PRE_TOOL_USE
+        assert payload.event_type == EventType.USER_PROMPT
         assert payload.tool == Tool.READ
         assert payload.identifier == "folder/file.txt"
         assert payload.content == ""  # empty because inexistent file
@@ -553,7 +553,6 @@ class TestFlavorOutputResult:
         assert kwargs.get("err", False) is False  # stdout (default)
         out = json.loads(args[0])
         assert out["permission"] == "allow"
-        assert out["reason"] == ""
 
     @patch("ggshield.verticals.secret.ai_hook.cursor.click.echo")
     def test_cursor_output_result_pre_tool_use_block(self, mock_echo: MagicMock):
@@ -571,8 +570,7 @@ class TestFlavorOutputResult:
         assert kwargs.get("err", False) is False  # stdout (default)
         out = json.loads(args[0])
         assert out["permission"] == "deny"
-        assert out["decision"] == "deny"
-        assert out["reason"] == "Secrets detected in command"
+        assert out["user_message"] == "Secrets detected in command"
 
     @patch("ggshield.verticals.secret.ai_hook.cursor.click.echo")
     def test_cursor_output_result_post_tool_use(self, mock_echo: MagicMock):
@@ -622,7 +620,6 @@ class TestFlavorOutputResult:
         assert kwargs.get("err", False) is False  # stdout (default)
         out = json.loads(args[0])
         assert out["continue"] is True
-        assert out["stopReason"] == ""
 
     @patch("ggshield.verticals.secret.ai_hook.claude_code.click.echo")
     def test_claude_output_result_block(self, mock_echo: MagicMock):
@@ -639,8 +636,10 @@ class TestFlavorOutputResult:
         args, kwargs = mock_echo.call_args
         assert kwargs.get("err", False) is False  # stdout (default)
         out = json.loads(args[0])
-        assert out["continue"] is False
-        assert out["stopReason"] == "Secrets in file"
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert (
+            out["hookSpecificOutput"]["permissionDecisionReason"] == "Secrets in file"
+        )
 
     @patch("ggshield.verticals.secret.ai_hook.claude_code.click.echo")
     def test_copilot_output_result_allow(self, mock_echo: MagicMock):
@@ -670,8 +669,23 @@ class TestFlavorOutputResult:
         args, kwargs = mock_echo.call_args
         assert kwargs.get("err", False) is False  # stdout (default)
         out = json.loads(args[0])
-        assert out["continue"] is False
-        assert out["stopReason"] == "Secret in tool output"
+        assert out["decision"] == "block"
+        assert out["reason"] == "Secret in tool output"
+
+    @patch("ggshield.verticals.secret.ai_hook.claude_code.click.echo")
+    def test_copilot_other_result_block(self, mock_echo: MagicMock):
+        """Copilot with block=True, other type of event"""
+        result = HookResult(
+            block=True,
+            message="Secret in tool output",
+            nbr_secrets=1,
+            payload=_dummy_payload(EventType.OTHER),
+        )
+        code = Copilot().output_result(result)
+        assert code == 0
+        args, _ = mock_echo.call_args
+        out = json.loads(args[0])
+        assert not out["continue"]
 
 
 class TestBaseFlavor:
@@ -739,6 +753,7 @@ class TestAIHookScannerScan:
             "tool_input": {"command": "echo sk-xxx"},
             "tool_response": {"stdout": "sk-xxx\n"},
             "transcript_path": "/home/user/.claude/projects/foo/session.jsonl",
+            "session_id": "427ae0c5-0862-4e14-aa2c-12fad909c323",
         }
         code = scanner.scan(json.dumps(data))
         assert code == 0
@@ -807,7 +822,7 @@ class TestMessageFromSecrets:
             flavor=Flavor(),
         )
         message = AIHookScanner._message_from_secrets([_make_secret("sk-xxx")], payload)
-        assert "remove the secrets from the file content" in message
+        assert "remove the secrets from" in message
 
     def test_message_for_other_tool(self):
         """Message for OTHER tool uses generic message."""

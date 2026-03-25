@@ -18,11 +18,9 @@ class Cursor(Flavor):
             response["continue"] = not result.block
             response["user_message"] = result.message
         elif result.payload.event_type == EventType.PRE_TOOL_USE:
-            # The documentation says "decision", but sometimes mentions "permission".
-            # After some testing it seems that "permission" is the correct one but let's keep both for now.
             response["permission"] = "deny" if result.block else "allow"
-            response["decision"] = response["permission"]
-            response["reason"] = result.message
+            response["user_message"] = result.message
+            response["agent_message"] = result.message
         elif result.payload.event_type == EventType.POST_TOOL_USE:
             pass  # Nothing to do here
         else:

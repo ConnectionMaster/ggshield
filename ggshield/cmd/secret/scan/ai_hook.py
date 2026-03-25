@@ -25,8 +25,13 @@ def ai_hook_cmd(
     """
     Scan AI tool interactions for secrets.
 
-    Reads a hook event from stdin as JSON, processes it based on the
-    event type and mode, and outputs the response to stdout as JSON.
+    Reads a hook event from stdin as JSON, processes it,
+    and outputs a response to stdout as JSON that blocks the action
+    if secrets are detected.
+
+    To install the hook for your AI coding tool, run:
+
+    `ggshield install -t <your-code-assistant> -m [local|global]`
     """
     ctx_obj = ContextObj.get(ctx)
     config = ctx_obj.config

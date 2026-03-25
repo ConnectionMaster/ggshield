@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import click
 
-from .models import Flavor, Result
+from .models import EventType, Flavor, Result
 
 
 class Claude(Flavor):
@@ -13,10 +13,29 @@ class Claude(Flavor):
     name = "Claude Code"
 
     def output_result(self, result: Result) -> int:
-        response = {
-            "continue": not result.block,
-            "stopReason": result.message,
-        }
+        response = {}
+        if result.block:
+            if result.payload.event_type in [
+                EventType.USER_PROMPT,
+                EventType.POST_TOOL_USE,
+            ]:
+                response["decision"] = "block"
+                response["reason"] = result.message
+                response["additionalContext"] = result.message
+            elif result.payload.event_type == EventType.PRE_TOOL_USE:
+                response["hookSpecificOutput"] = {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": result.message,
+                }
+            else:
+                # Should not happen, but just in case use Claude's "universal" fields.
+                response = {
+                    "continue": False,
+                    "stopReason": result.message,
+                }
+        else:
+            response["continue"] = True
 
         click.echo(json.dumps(response))
         # We don't use the return 2 convention to make sure our JSON output is read.
