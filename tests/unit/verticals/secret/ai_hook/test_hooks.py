@@ -822,7 +822,7 @@ class TestMessageFromSecrets:
             flavor=Flavor(),
         )
         message = AIHookScanner._message_from_secrets([_make_secret("sk-xxx")], payload)
-        assert "remove the secrets from the file content" in message
+        assert "remove the secrets from" in message
 
     def test_message_for_other_tool(self):
         """Message for OTHER tool uses generic message."""

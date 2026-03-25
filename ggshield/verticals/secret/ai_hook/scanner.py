@@ -257,9 +257,7 @@ class AIHookScanner:
                 f"  - {secret.detector_display_name} ({validity}): {match_str}"
             )
 
-        if payload.event_type == EventType.USER_PROMPT:
-            message = "Please remove the secrets from your prompt before submitting."
-        elif payload.tool == Tool.BASH:
+        if payload.tool == Tool.BASH:
             if payload.event_type == EventType.POST_TOOL_USE:
                 message = "Secrets detected in the command output."
             else:
@@ -268,9 +266,9 @@ class AIHookScanner:
                     "Consider using environment variables or a secrets manager instead."
                 )
         elif payload.tool == Tool.READ:
-            message = (
-                "Please remove the secrets from the file content before reading it."
-            )
+            message = f"Please remove the secrets from {payload.identifier} before reading it."
+        elif payload.event_type == EventType.USER_PROMPT:
+            message = "Please remove the secrets from your prompt before submitting."
         else:
             message = (
                 "Please remove the secrets from the tool input before executing. "
