@@ -1,15 +1,11 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import click
-
 from ggshield.core.scan import File, Scannable, StringScannable
 from ggshield.utils.files import is_path_binary
-
-
-MAX_READ_SIZE = 1024 * 1024 * 50  # We restrict payloads read to 50MB
 
 
 class EventType(Enum):
@@ -33,31 +29,64 @@ class Tool(Enum):
 
 
 @dataclass
-class Result:
+class HookResult:
     """Result of a scan: allow or not."""
 
     block: bool
     message: str
     nbr_secrets: int
-    payload: "Payload"
+    payload: "HookPayload"
 
     @classmethod
-    def allow(cls, payload: "Payload") -> "Result":
+    def allow(cls, payload: "HookPayload") -> "HookResult":
         return cls(block=False, message="", nbr_secrets=0, payload=payload)
 
 
-class Flavor:
+@dataclass
+class HookPayload:
+    event_type: EventType
+    tool: Optional[Tool]
+    content: str
+    identifier: str
+    agent: "Agent"
+
+    @property
+    def scannable(self) -> Scannable:
+        """Return the appropriate Scannable for the payload."""
+        if self.tool == Tool.READ:
+            path = Path(self.identifier)
+            if path.is_file() and not is_path_binary(path):
+                return File(path=self.identifier)
+        return StringScannable(url=self.identifier, content=self.content)
+
+    @property
+    def empty(self) -> bool:
+        """Return True if the payload is empty."""
+        return not self.scannable.is_longer_than(0)
+
+
+class Agent(ABC):
     """
     Class that can be derived to implement behavior specific to some AI code assistants.
     """
 
-    name = "Your AI coding tool"
+    # Metadata
 
-    def output_result(self, result: Result) -> int:
+    @property
+    @abstractmethod
+    def display_name(self) -> str:
+        """A user-friendly name for the agent."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """The name of the agent."""
+
+    # Hooks
+
+    @abstractmethod
+    def output_result(self, result: HookResult) -> int:
         """How to output the result of a scan.
-
-        This base implementation has sensible defaults (like returning 2 in case of a block,
-        and printing the output in stderr or stdout).
 
         This method is expected to have side effects, like printing to stdout or stderr.
 
@@ -66,26 +95,23 @@ class Flavor:
 
         Returns: the exit code.
         """
-        if result.block:
-            click.echo(result.message, err=True)
-            return 2
-        else:
-            click.echo("No secrets found. Good to go.")
-            return 0
+
+    # Settings
 
     @property
+    @abstractmethod
     def settings_path(self) -> Path:
         """Path to the settings file for this AI coding tool."""
-        return Path(".agents") / "hooks.json"
 
     @property
+    @abstractmethod
     def settings_template(self) -> Dict[str, Any]:
         """
         Template for the settings file for this AI coding tool.
         Use the sentinel "<COMMAND>" for the places where the command should be inserted.
         """
-        return {}
 
+    @abstractmethod
     def settings_locate(
         self, candidates: List[Dict[str, Any]], template: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
@@ -102,26 +128,3 @@ class Flavor:
         Returns: the object to update, or None if no object was found.
         """
         return None
-
-
-@dataclass
-class Payload:
-    event_type: EventType
-    tool: Optional[Tool]
-    content: str
-    identifier: str
-    flavor: Flavor
-
-    @property
-    def scannable(self) -> Scannable:
-        """Return the appropriate Scannable for the payload."""
-        if self.tool == Tool.READ:
-            path = Path(self.identifier)
-            if path.is_file() and not is_path_binary(path):
-                return File(path=self.identifier)
-        return StringScannable(url=self.identifier, content=self.content)
-
-    @property
-    def empty(self) -> bool:
-        """Return True if the payload is empty."""
-        return not self.scannable.is_longer_than(0)

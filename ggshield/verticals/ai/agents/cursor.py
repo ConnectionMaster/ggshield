@@ -4,15 +4,21 @@ from typing import Any, Dict, List, Optional
 
 import click
 
-from .models import EventType, Flavor, Result
+from ..models import Agent, EventType, HookResult
 
 
-class Cursor(Flavor):
+class Cursor(Agent):
     """Behavior specific to Cursor."""
 
-    name = "Cursor"
+    @property
+    def name(self) -> str:
+        return "cursor"
 
-    def output_result(self, result: Result) -> int:
+    @property
+    def display_name(self) -> str:
+        return "Cursor"
+
+    def output_result(self, result: HookResult) -> int:
         response = {}
         if result.payload.event_type == EventType.USER_PROMPT:
             response["continue"] = not result.block

@@ -6,10 +6,8 @@ from unittest.mock import patch
 import pytest
 
 from ggshield.core.errors import UnexpectedError
-from ggshield.verticals.secret.ai_hook.claude_code import Claude
-from ggshield.verticals.secret.ai_hook.copilot import Copilot
-from ggshield.verticals.secret.ai_hook.cursor import Cursor
-from ggshield.verticals.secret.ai_hook.installation import (
+from ggshield.verticals.ai.agents import Claude, Copilot, Cursor
+from ggshield.verticals.ai.installation import (
     InstallationStats,
     _fill_dict,
     install_hooks,
@@ -287,16 +285,14 @@ class TestFlavorSettingsProperties:
 class TestInstallHooks:
     """Unit tests for the install_hooks function."""
 
-    @patch("ggshield.verticals.secret.ai_hook.installation.get_user_home_dir")
+    @patch("ggshield.verticals.ai.installation.get_user_home_dir")
     def test_install_cursor_local_fresh(self, mock_home: Any, tmp_path: Path):
         """Install Cursor hooks locally into a fresh directory (no existing config)."""
         mock_home.return_value = tmp_path
         settings_path = tmp_path / ".cursor" / "hooks.json"
         assert not settings_path.exists()
 
-        with patch(
-            "ggshield.verticals.secret.ai_hook.installation.Path"
-        ) as mock_path_cls:
+        with patch("ggshield.verticals.ai.installation.Path") as mock_path_cls:
             # Make Path(".") return tmp_path so local mode writes there
             mock_path_cls.side_effect = lambda *a: Path(*a) if a != (".",) else tmp_path
             code = install_hooks("cursor", mode="local")
@@ -308,7 +304,7 @@ class TestInstallHooks:
         for key in ("beforeSubmitPrompt", "preToolUse", "postToolUse"):
             assert any("ggshield" in h["command"] for h in config["hooks"][key])
 
-    @patch("ggshield.verticals.secret.ai_hook.installation.get_user_home_dir")
+    @patch("ggshield.verticals.ai.installation.get_user_home_dir")
     def test_install_claude_global(self, mock_home: Any, tmp_path: Path):
         """Install Claude Code hooks globally."""
         mock_home.return_value = tmp_path
@@ -322,7 +318,7 @@ class TestInstallHooks:
         for key in ("PreToolUse", "PostToolUse", "UserPromptSubmit"):
             assert key in config["hooks"]
 
-    @patch("ggshield.verticals.secret.ai_hook.installation.get_user_home_dir")
+    @patch("ggshield.verticals.ai.installation.get_user_home_dir")
     def test_install_copilot_global(self, mock_home: Any, tmp_path: Path):
         """Install Copilot hooks globally."""
         mock_home.return_value = tmp_path
@@ -332,12 +328,12 @@ class TestInstallHooks:
         settings_path = tmp_path / ".github" / "hooks" / "hooks.json"
         assert settings_path.exists()
 
-    def test_install_unsupported_tool_raises(self):
-        """install_hooks raises ValueError for unsupported tool name."""
-        with pytest.raises(ValueError, match="Unsupported tool name"):
-            install_hooks("unknown-tool", mode="local")
+    def test_install_unsupported_agent_raises(self):
+        """install_hooks raises ValueError for unsupported agent."""
+        with pytest.raises(ValueError, match="Unsupported agent"):
+            install_hooks("unknown-agent", mode="local")
 
-    @patch("ggshield.verticals.secret.ai_hook.installation.get_user_home_dir")
+    @patch("ggshield.verticals.ai.installation.get_user_home_dir")
     def test_install_with_existing_config(self, mock_home: Any, tmp_path: Path):
         """Install hooks when a config file already exists (merges)."""
         mock_home.return_value = tmp_path
@@ -345,9 +341,7 @@ class TestInstallHooks:
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({"version": 1, "other_key": "keep_me"}))
 
-        with patch(
-            "ggshield.verticals.secret.ai_hook.installation.Path"
-        ) as mock_path_cls:
+        with patch("ggshield.verticals.ai.installation.Path") as mock_path_cls:
             mock_path_cls.side_effect = lambda *a: Path(*a) if a != (".",) else tmp_path
             code = install_hooks("cursor", mode="local")
 
@@ -356,7 +350,7 @@ class TestInstallHooks:
         assert config["other_key"] == "keep_me"
         assert "hooks" in config
 
-    @patch("ggshield.verticals.secret.ai_hook.installation.get_user_home_dir")
+    @patch("ggshield.verticals.ai.installation.get_user_home_dir")
     def test_install_with_corrupt_json_raises(self, mock_home: Any, tmp_path: Path):
         """install_hooks raises UnexpectedError when existing config is invalid JSON."""
         mock_home.return_value = tmp_path
@@ -364,21 +358,17 @@ class TestInstallHooks:
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text("{ invalid json")
 
-        with patch(
-            "ggshield.verticals.secret.ai_hook.installation.Path"
-        ) as mock_path_cls:
+        with patch("ggshield.verticals.ai.installation.Path") as mock_path_cls:
             mock_path_cls.side_effect = lambda *a: Path(*a) if a != (".",) else tmp_path
             with pytest.raises(UnexpectedError, match="Failed to parse"):
                 install_hooks("cursor", mode="local")
 
-    @patch("ggshield.verticals.secret.ai_hook.installation.get_user_home_dir")
+    @patch("ggshield.verticals.ai.installation.get_user_home_dir")
     def test_install_already_present(self, mock_home: Any, tmp_path: Path):
         """install_hooks when hooks are already installed reports 'already installed'."""
         mock_home.return_value = tmp_path
 
-        with patch(
-            "ggshield.verticals.secret.ai_hook.installation.Path"
-        ) as mock_path_cls:
+        with patch("ggshield.verticals.ai.installation.Path") as mock_path_cls:
             mock_path_cls.side_effect = lambda *a: Path(*a) if a != (".",) else tmp_path
             # Install once
             install_hooks("cursor", mode="local")
@@ -387,14 +377,12 @@ class TestInstallHooks:
 
         assert code == 0
 
-    @patch("ggshield.verticals.secret.ai_hook.installation.get_user_home_dir")
+    @patch("ggshield.verticals.ai.installation.get_user_home_dir")
     def test_install_force_updates(self, mock_home: Any, tmp_path: Path):
         """install_hooks with force=True updates existing hooks."""
         mock_home.return_value = tmp_path
 
-        with patch(
-            "ggshield.verticals.secret.ai_hook.installation.Path"
-        ) as mock_path_cls:
+        with patch("ggshield.verticals.ai.installation.Path") as mock_path_cls:
             mock_path_cls.side_effect = lambda *a: Path(*a) if a != (".",) else tmp_path
             install_hooks("cursor", mode="local")
             code = install_hooks("cursor", mode="local", force=True)

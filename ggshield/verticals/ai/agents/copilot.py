@@ -3,8 +3,8 @@ from pathlib import Path
 
 import click
 
+from ..models import EventType, HookResult
 from .claude_code import Claude
-from .models import EventType, Result
 
 
 class Copilot(Claude):
@@ -13,9 +13,15 @@ class Copilot(Claude):
     Inherits most of its behavior from Claude Code.
     """
 
-    name = "Copilot"
+    @property
+    def name(self) -> str:
+        return "copilot"
 
-    def output_result(self, result: Result) -> int:
+    @property
+    def display_name(self) -> str:
+        return "Copilot Chat"
+
+    def output_result(self, result: HookResult) -> int:
         response = {}
         if result.block:
             if result.payload.event_type == EventType.PRE_TOOL_USE:
