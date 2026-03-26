@@ -13,19 +13,6 @@ from ggshield.utils.os import cd
 from tests.unit.conftest import assert_invoke_ok, my_vcr
 
 
-_API_TOKENS_RESPONSE = APITokensResponse.from_dict(
-    {
-        "id": "5ddaad0c-5a0c-4674-beb5-1cd198d13360",
-        "name": "test-token",
-        "workspace_id": 1,
-        "type": "personal_access_token",
-        "status": "active",
-        "created_at": "2023-01-01T00:00:00Z",
-        "scopes": ["scan"],
-    }
-)
-
-
 def test_quota(cli_fs_runner, quota_json_schema):
     with my_vcr.use_cassette("quota"):
         cmd = ["quota", "--json"]
@@ -78,7 +65,17 @@ def test_api_status(cli_fs_runner, api_status_json_schema):
 )
 @mock.patch(
     "pygitguardian.GGClient.api_tokens",
-    return_value=Detail("Unauthorized", 401),
+    return_value=APITokensResponse.from_dict(
+        {
+            "id": "5ddaad0c-5a0c-4674-beb5-1cd198d13360",
+            "name": "test-token",
+            "workspace_id": 1,
+            "type": "personal_access_token",
+            "status": "active",
+            "created_at": "2023-01-01T00:00:00Z",
+            "scopes": ["scan"],
+        }
+    ),
 )
 def test_api_status_sources(_, __, hs_mock, cli_fs_runner, tmp_path, monkeypatch):
     """
@@ -188,23 +185,14 @@ def test_instance_option(cli_fs_runner, command):
         assert kwargs["base_uri"] == "https://dashboard.my-instance.com/exposed"
 
 
-@mock.patch(
-    "pygitguardian.GGClient.api_tokens",
-    return_value=_API_TOKENS_RESPONSE,
-)
-@mock.patch(
-    "pygitguardian.GGClient.health_check",
-    return_value=HealthCheckResponse(detail="Valid API key.", status_code=200),
-)
-def test_api_status_shows_token_scopes(
-    health_check_mock, api_tokens_mock, cli_fs_runner
-):
+def test_api_status_shows_token_scopes(cli_fs_runner):
     """
     GIVEN a valid API token with scopes
     WHEN running api-status
     THEN the token scopes are displayed in the output
     """
-    result = cli_fs_runner.invoke(cli, ["api-status"], color=False)
+    with my_vcr.use_cassette("test_health_check"):
+        result = cli_fs_runner.invoke(cli, ["api-status"], color=False)
     assert_invoke_ok(result)
     assert "Token scopes:" in result.output
     assert "scan" in result.output
