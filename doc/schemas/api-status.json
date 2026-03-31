@@ -32,6 +32,11 @@
     "secrets_engine_version": {
       "type": "string",
       "description": "Version of the secrets engine"
+    },
+    "token_scopes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of scopes granted to the current authentication token"
     }
   },
   "required": [

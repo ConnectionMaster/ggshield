@@ -3,7 +3,7 @@ from unittest import mock
 
 import jsonschema
 import pytest
-from pygitguardian.models import HealthCheckResponse
+from pygitguardian.models import APITokensResponse, Detail, HealthCheckResponse
 from pytest_voluptuous import S
 from voluptuous.validators import All, In, Match
 
@@ -47,6 +47,7 @@ def test_api_status(cli_fs_runner, api_status_json_schema):
                     "secrets_engine_version": Match(r"\d\.\d{1,3}\.\d"),
                     "instance_source": In(x.name for x in ConfigSource),
                     "api_key_source": In(x.name for x in ConfigSource),
+                    "token_scopes": ["scan"],
                 }
             )
         )
@@ -62,7 +63,21 @@ def test_api_status(cli_fs_runner, api_status_json_schema):
     "pygitguardian.GGClient.health_check",
     return_value=HealthCheckResponse(detail="", status_code=200),
 )
-def test_api_status_sources(_, hs_mock, cli_fs_runner, tmp_path, monkeypatch):
+@mock.patch(
+    "pygitguardian.GGClient.api_tokens",
+    return_value=APITokensResponse.from_dict(
+        {
+            "id": "5ddaad0c-5a0c-4674-beb5-1cd198d13360",
+            "name": "test-token",
+            "workspace_id": 1,
+            "type": "personal_access_token",
+            "status": "active",
+            "created_at": "2023-01-01T00:00:00Z",
+            "scopes": ["scan"],
+        }
+    ),
+)
+def test_api_status_sources(_, __, hs_mock, cli_fs_runner, tmp_path, monkeypatch):
     """
     GIVEN an api_key and an instance configured anywhere
     WHEN running the api-status command
@@ -168,3 +183,37 @@ def test_instance_option(cli_fs_runner, command):
         cli_fs_runner.invoke(cli, [command, "--instance", uri])
         _, kwargs = client_mock.call_args
         assert kwargs["base_uri"] == "https://dashboard.my-instance.com/exposed"
+
+
+def test_api_status_shows_token_scopes(cli_fs_runner):
+    """
+    GIVEN a valid API token with scopes
+    WHEN running api-status
+    THEN the token scopes are displayed in the output
+    """
+    with my_vcr.use_cassette("test_health_check"):
+        result = cli_fs_runner.invoke(cli, ["api-status"], color=False)
+    assert_invoke_ok(result)
+    assert "Token scopes:" in result.output
+    assert "scan" in result.output
+
+
+@mock.patch(
+    "pygitguardian.GGClient.api_tokens",
+    return_value=Detail("Unauthorized", 401),
+)
+@mock.patch(
+    "pygitguardian.GGClient.health_check",
+    return_value=HealthCheckResponse(detail="Valid API key.", status_code=200),
+)
+def test_api_status_scopes_omitted_on_error(
+    health_check_mock, api_tokens_mock, cli_fs_runner
+):
+    """
+    GIVEN an api_tokens call that returns an error
+    WHEN running api-status
+    THEN the command succeeds and token scopes are simply omitted from the output
+    """
+    result = cli_fs_runner.invoke(cli, ["api-status"], color=False)
+    assert_invoke_ok(result)
+    assert "Token scopes:" not in result.output
