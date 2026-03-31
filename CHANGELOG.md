@@ -1,5 +1,34 @@
 # Changelog
 
+<a id='changelog-1.49.0'></a>
+
+## 1.49.0 — 2026-03-31
+
+### Removed
+
+- Pre-receive hook on GitHub Enterprise Server v3.9 to v3.13 is no longer supported. v3.13 is EOL since [2025-06-19](https://docs.github.com/en/enterprise-server@3.13/admin/release-notes) and previous versions were discontinued earlier.
+
+### Added
+
+- Add `@file` support to `secret scan path` to load scan paths from a file.
+
+- Add `ggshield secret scan ai-hook` command to scan AI coding tool hook payloads for secrets in real time.
+- Add new types `claude-code|cursor|copilot` to the `ggshield install` command to install hooks into AI coding tool configurations.
+
+- Pre-receive hook can now be set up on GitHub Enterprise Server from v3.14 to higher.
+
+- `api-status`: display the scopes of the current authentication token.
+
+### Fixed
+
+- `secret scan ci`: fetch the target branch before computing the MR/PR commit range. In CI environments with cached repos or shallow clones, a stale target branch ref could cause ggshield to scan unrelated commits, leading to excessive API calls and secrets reported in files not modified by the MR.
+
+- `hmsl vault-scan`: fixed a hang when the HashiCorp Vault server is unresponsive; requests now time out after 30 seconds and network errors are reported with a clear message.
+
+- Fixed a path traversal security issue in tar archives used for git-based scans; member names with absolute paths or `..` components are now sanitized.
+
+- Fixed an issue where an invalid option for a `secret scan` subcommand could be silently treated as a request to run the default command, producing a confusing error instead of the expected usage error.
+
 <a id='changelog-1.48.0'></a>
 
 ## 1.48.0 — 2026-02-17
