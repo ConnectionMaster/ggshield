@@ -1,11 +1,12 @@
 from typing import Optional, Tuple
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from requests.exceptions import ConnectionError
 
 from ggshield.__main__ import cli
 from ggshield.core.config import Config
+from ggshield.core.config.token_store import KeyringTokenStore, reset_token_store
 from ggshield.core.constants import DEFAULT_INSTANCE_URL
 from ggshield.core.errors import ExitCode
 
@@ -77,8 +78,7 @@ class TestAuthLogout:
             )
         else:
             expected_output += (
-                "Your personal access token has been removed "
-                "from your configuration.\n"
+                "Your personal access token has been removed from your configuration.\n"
             )
 
         assert output == expected_output
@@ -158,6 +158,39 @@ class TestAuthLogout:
             assert instance.account is None, output
 
         assert exit_code == ExitCode.SUCCESS, output
+
+    def test_logout_deletes_from_keyring(self, monkeypatch, cli_fs_runner):
+        """
+        GIVEN a saved instance configuration with keyring enabled
+        WHEN running the logout command with --no-revoke
+        THEN the token is deleted from keyring
+        """
+        reset_token_store()
+
+        mock_store = KeyringTokenStore()
+        mock_store.delete_token = MagicMock()
+        mock_store.store_token = MagicMock()
+        mock_store.is_available = MagicMock(return_value=True)
+
+        add_instance_config()
+
+        with (
+            patch(
+                "ggshield.cmd.auth.logout.get_token_store",
+                return_value=mock_store,
+            ),
+            patch(
+                "ggshield.core.config.auth_config.get_token_store",
+                return_value=mock_store,
+            ),
+        ):
+            exit_code, output = self.run_cmd(
+                cli_fs_runner, DEFAULT_INSTANCE_URL, revoke=False
+            )
+
+        assert exit_code == ExitCode.SUCCESS, output
+        mock_store.delete_token.assert_called_once_with(DEFAULT_INSTANCE_URL)
+        reset_token_store()
 
     @staticmethod
     def run_cmd(

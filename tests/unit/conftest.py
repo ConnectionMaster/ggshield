@@ -800,6 +800,22 @@ def make_fake_path_inaccessible(fs: FakeFilesystem, path: Union[str, Path]):
 
 
 @pytest.fixture(autouse=True)
+def _disable_keyring(monkeypatch):
+    """Prevent tests from touching the real OS keyring.
+
+    Sets GGSHIELD_NO_KEYRING=1 and resets the cached token store so every test
+    starts with a FileTokenStore.  Tests that explicitly need keyring behaviour
+    should mock the store directly.
+    """
+    from ggshield.core.config.token_store import reset_token_store
+
+    monkeypatch.setenv("GGSHIELD_NO_KEYRING", "1")
+    reset_token_store()
+    yield
+    reset_token_store()
+
+
+@pytest.fixture(autouse=True)
 def clear_cache():
     _get_git_path.cache_clear()
     _git_rev_parse_absolute.cache_clear()

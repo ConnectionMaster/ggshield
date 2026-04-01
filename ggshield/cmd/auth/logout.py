@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import click
@@ -8,8 +9,12 @@ from ggshield.cmd.utils.common_options import add_common_options
 from ggshield.cmd.utils.context_obj import ContextObj
 from ggshield.core.client import create_client
 from ggshield.core.config import Config
+from ggshield.core.config.token_store import get_token_store
 from ggshield.core.errors import AuthError, UnexpectedError
 from ggshield.core.url_utils import dashboard_to_api_url
+
+
+logger = logging.getLogger(__name__)
 
 
 CONNECTION_ERROR_MESSAGE = (
@@ -117,6 +122,17 @@ def delete_account_config(config: Config, instance: str) -> None:
     account_config = instance_config.account
 
     assert account_config is not None
+
+    store = get_token_store()
+    if store.uses_external_storage:
+        try:
+            store.delete_token(instance_config.url)
+        except Exception:
+            logger.warning(
+                "Failed to delete token from keyring for %s",
+                instance,
+                exc_info=True,
+            )
 
     instance_config.account = None
     config.auth_config.set_instance(instance_config)
