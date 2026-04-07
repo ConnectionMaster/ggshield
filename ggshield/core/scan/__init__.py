@@ -3,6 +3,7 @@ from .file import File, create_files_from_paths
 from .scan_context import ScanContext
 from .scan_mode import ScanMode
 from .scannable import DecodeError, NonSeekableFileError, Scannable, StringScannable
+from .scanner import ResultsProtocol, ScannerProtocol, SecretProtocol
 
 
 __all__ = [
@@ -11,8 +12,11 @@ __all__ = [
     "DecodeError",
     "File",
     "NonSeekableFileError",
+    "ResultsProtocol",
     "ScanContext",
     "ScanMode",
     "Scannable",
+    "ScannerProtocol",
+    "SecretProtocol",
     "StringScannable",
 ]

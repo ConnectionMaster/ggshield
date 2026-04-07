@@ -80,11 +80,11 @@ def install_hooks(
     # Report what happened
     styled_path = click.style(settings_path, fg="yellow", bold=True)
     if stats.added == 0 and stats.already_present > 0:
-        click.echo(f"{agent.name} hooks already installed in {styled_path}")
+        click.echo(f"{agent.display_name} hooks already installed in {styled_path}")
     elif stats.added > 0 and stats.already_present > 0:
-        click.echo(f"{agent.name} hooks updated in {styled_path}")
+        click.echo(f"{agent.display_name} hooks updated in {styled_path}")
     else:
-        click.echo(f"{agent.name} hooks successfully added in {styled_path}")
+        click.echo(f"{agent.display_name} hooks successfully added in {styled_path}")
 
     return 0
 

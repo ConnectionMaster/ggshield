@@ -64,6 +64,10 @@ STATIC_CONFIG = {
                 "ggshield.cmd.{}.** -> ggshield.verticals.{}.**",
                 # FIXME: #521 - enforce boundaries between cmd.auth and verticals.hmsl
                 "ggshield.cmd.auth.** -> ggshield.verticals.hmsl.**",
+                # Install command import logic to install AI hooks
+                "ggshield.cmd.install -> ggshield.verticals.ai.installation",
+                # AI hook command import logic to scan AI hook payloads
+                "ggshield.cmd.secret.scan.ai_hook -> ggshield.verticals.ai.hooks",
             ],
             "unmatched_ignore_imports_alerting": "none",
         },
