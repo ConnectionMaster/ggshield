@@ -32,11 +32,12 @@
               System="yes"
             />
           </Component>
+          <Directory Id="InternalDir" Name="_internal" />
         </Directory>
       </Directory>
     </StandardDirectory>
 
-    <ComponentGroup Id="InternalFiles" Directory="INSTALLFOLDER">
+    <ComponentGroup Id="InternalFiles" Directory="InternalDir">
       <Files Include="!(bindpath.SourceDir)\_internal\**" />
     </ComponentGroup>
 
