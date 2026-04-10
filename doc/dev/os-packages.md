@@ -70,6 +70,10 @@ For Gatekeeper to accept the app, the executable and all the dynamic libraries m
 
 ## Windows specific information
 
+### Requirements
+
+Building the MSI requires the [.NET SDK](https://dotnet.microsoft.com/download) and the WiX CLI tool (`dotnet tool install --global wix --version 5.0.2`).
+
 ### Signing
 
 We use [DigiCert](https://www.digicert.com) to sign `ggshield` Windows binaries.
@@ -100,7 +104,7 @@ Once all environment variables are set and DigiCert tools are installed, one can
 
 ### MSI Package
 
-The build produces an MSI installer (`ggshield-VERSION-x86_64-pc-windows-msvc.msi`) using [WiX Toolset v4](https://wixtoolset.org/). The WiX source file is `scripts/build-os-packages/ggshield.wxs`.
+The build produces an MSI installer (`ggshield-VERSION-x86_64-pc-windows-msvc.msi`) using [WiX Toolset v5](https://wixtoolset.org/). The WiX source file is `scripts/build-os-packages/ggshield.wxs`.
 
 - **Install location**: `C:\Program Files\GitGuardian\ggshield\`
 - **PATH**: The installer adds the install location to the system `PATH`. This is removed on uninstall.
