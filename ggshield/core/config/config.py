@@ -8,6 +8,7 @@ from typing import Any, Optional, Set, Tuple
 import click
 
 from ggshield.core.config.auth_config import AuthConfig
+from ggshield.core.config.token_store import get_token_store
 from ggshield.core.config.user_config import UserConfig
 from ggshield.core.config.utils import remove_url_trailing_slash
 from ggshield.core.constants import DEFAULT_HMSL_URL, DEFAULT_INSTANCE_URL
@@ -28,6 +29,7 @@ class ConfigSource(Enum):
     CMD_OPTION = "command line option"
     DOTENV = ".env file"
     ENV_VAR = "environment variable"
+    KEYRING = "keyring"
     USER_CONFIG = "user config"
     DEFAULT = "default"
 
@@ -196,7 +198,12 @@ class Config:
             )
         except KeyError:
             key = self.auth_config.get_instance_token(self.instance_name)
-            source = ConfigSource.USER_CONFIG
+            store = get_token_store()
+            source = (
+                ConfigSource.KEYRING
+                if store.uses_external_storage
+                else ConfigSource.USER_CONFIG
+            )
         return key, source
 
     def add_ignored_match(self, *args: Any, **kwargs: Any) -> None:

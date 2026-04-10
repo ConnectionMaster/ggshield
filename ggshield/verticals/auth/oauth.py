@@ -336,6 +336,9 @@ class OAuthClient:
             self.instance_config.account = None
             return False
 
+        # Trigger a save to migrate cleartext tokens to keyring if needed
+        self.config.auth_config.save()
+
         message = "ggshield is already authenticated "
         if account.expire_at:
             message += "until " + get_pretty_date(account.expire_at)

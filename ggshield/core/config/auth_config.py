@@ -1,3 +1,4 @@
+import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -6,6 +7,11 @@ from typing import Any, Dict, List, Optional, cast
 import marshmallow_dataclass
 from pygitguardian.models_utils import FromDictMixin, ToDictMixin
 
+from ggshield.core.config.token_store import (
+    KEYRING_SENTINEL,
+    TokenStore,
+    get_token_store,
+)
 from ggshield.core.config.utils import (
     get_auth_config_filepath,
     load_yaml_dict,
@@ -18,6 +24,9 @@ from ggshield.core.errors import (
     UnknownInstanceError,
 )
 from ggshield.utils.datetime import datetime_from_isoformat
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -107,6 +116,23 @@ def prepare_auth_config_dict_for_save(data: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
+def _replace_tokens_with_sentinel(
+    data: Dict[str, Any], fallback_urls: set[str]
+) -> None:
+    """Replace real tokens with the keyring sentinel in the serialized dict,
+    except for instances that failed keyring storage."""
+    for instance in data.get("instances", []):
+        if instance.get("url") in fallback_urls:
+            continue
+        for account in instance.get("accounts", []):
+            if (
+                account is not None
+                and account.get("token")
+                and account["token"] != KEYRING_SENTINEL
+            ):
+                account["token"] = KEYRING_SENTINEL
+
+
 @dataclass
 class AuthConfig(FromDictMixin, ToDictMixin):
     """
@@ -119,18 +145,41 @@ class AuthConfig(FromDictMixin, ToDictMixin):
 
     @classmethod
     def load(cls) -> "AuthConfig":
-        """Load the auth config from the app config file"""
+        """Load the auth config from the app config file.
+
+        If the active token store is a keyring backend, tokens marked with the
+        keyring sentinel are hydrated from the OS credential store.
+        """
         config_path = get_auth_config_filepath()
 
         data = load_yaml_dict(config_path)
         if data:
             data = prepare_auth_config_dict_for_parse(data)
-            return cls.from_dict(data)
-        return cls()
+            instance = cls.from_dict(data)
+        else:
+            instance = cls()
+
+        store = get_token_store()
+        if store.uses_external_storage:
+            for inst in instance.instances:
+                cls._hydrate_from_keyring(store, inst)
+        else:
+            for inst in instance.instances:
+                cls._warn_sentinel_without_keyring(inst)
+
+        return instance
 
     def save(self) -> None:
         config_path = get_auth_config_filepath()
+        store = get_token_store()
         data = prepare_auth_config_dict_for_save(self.to_dict())
+
+        if store.uses_external_storage:
+            fallback_urls: set[str] = set()
+            for inst in self.instances:
+                self._persist_to_keyring(store, inst, fallback_urls)
+            _replace_tokens_with_sentinel(data, fallback_urls)
+
         save_yaml_dict(data, config_path, restricted=True)
 
     def get_instance(self, instance_name: str) -> InstanceConfig:
@@ -168,9 +217,69 @@ class AuthConfig(FromDictMixin, ToDictMixin):
         instance = self.get_instance(instance_name)
         if instance.expired:
             raise AuthExpiredError(instance=instance_name)
-        if instance.account is None:
+        if instance.account is None or not instance.account.token:
             raise MissingTokenError(instance=instance_name)
         return instance.account.token
+
+    @staticmethod
+    def _hydrate_from_keyring(store: TokenStore, inst: InstanceConfig) -> None:
+        if inst.account is None or inst.account.token != KEYRING_SENTINEL:
+            return
+        try:
+            token = store.get_token(inst.url)
+        except Exception:
+            logger.warning(
+                "Failed to retrieve token from keyring for %s",
+                inst.url,
+                exc_info=True,
+            )
+            token = None
+
+        if token is not None:
+            inst.account.token = token
+        else:
+            logger.warning(
+                "Token for %s was expected in keyring but not found. "
+                "Re-authenticate with 'ggshield auth login'.",
+                inst.url,
+            )
+            # Preserve account metadata; only clear the token so
+            # that a subsequent save() does not destroy the config.
+            inst.account.token = ""
+
+    @staticmethod
+    def _warn_sentinel_without_keyring(inst: InstanceConfig) -> None:
+        if inst.account is None or inst.account.token != KEYRING_SENTINEL:
+            return
+        logger.warning(
+            "Token for %s is stored in keyring but keyring is disabled. "
+            "Unset GGSHIELD_NO_KEYRING or re-authenticate with "
+            "'ggshield auth login'.",
+            inst.url,
+        )
+        inst.account.token = ""
+
+    @staticmethod
+    def _persist_to_keyring(
+        store: TokenStore,
+        inst: InstanceConfig,
+        fallback_urls: set[str],
+    ) -> None:
+        if (
+            inst.account is None
+            or not inst.account.token
+            or inst.account.token == KEYRING_SENTINEL
+        ):
+            return
+        try:
+            store.store_token(inst.url, inst.account.token)
+        except Exception:
+            logger.warning(
+                "Failed to store token in keyring for %s, storing in config file",
+                inst.url,
+                exc_info=True,
+            )
+            fallback_urls.add(inst.url)
 
 
 AuthConfig.SCHEMA = marshmallow_dataclass.class_schema(AuthConfig)()

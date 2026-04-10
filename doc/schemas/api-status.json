@@ -18,7 +18,7 @@
       "description": "Source the instance was read from"
     },
     "api_key_source": {
-      "enum": ["DOTENV", "ENV_VAR", "USER_CONFIG"],
+      "enum": ["DOTENV", "ENV_VAR", "KEYRING", "USER_CONFIG"],
       "description": "Source the API key was read from"
     },
     "detail": {
