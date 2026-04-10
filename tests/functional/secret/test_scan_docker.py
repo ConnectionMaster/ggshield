@@ -17,7 +17,11 @@ from tests.functional.utils import recreate_censored_content, run_ggshield_scan
 TEST_DOCKER_IMAGE = os.getenv("GGTEST_DOCKER_IMAGE", "ubuntu:20.04")
 
 
-pytestmark = [requires_docker(), pytest.mark.xdist_group("docker")]
+pytestmark = [
+    requires_docker(),
+    pytest.mark.xdist_group("docker"),
+    pytest.mark.uses_gitguardian_api,
+]
 
 
 @pytest.fixture()

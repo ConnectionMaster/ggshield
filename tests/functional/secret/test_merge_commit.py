@@ -9,6 +9,9 @@ from tests.functional.utils_create_merge_repo import (
 )
 
 
+pytestmark = pytest.mark.uses_gitguardian_api
+
+
 @pytest.mark.parametrize(
     "with_conflict",
     [

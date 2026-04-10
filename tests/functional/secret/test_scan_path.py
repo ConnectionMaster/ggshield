@@ -19,6 +19,9 @@ from tests.functional.utils import (
 )
 
 
+pytestmark = pytest.mark.uses_gitguardian_api
+
+
 @pytest.mark.parametrize("path", ("config.py", ".git/config"))
 @pytest.mark.parametrize("show_secrets", (True, False))
 def test_scan_path(tmp_path: Path, path: str, show_secrets: bool) -> None:

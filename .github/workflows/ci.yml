@@ -127,13 +127,40 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
-      - name: Run functional tests
-        # See note about steps requiring the GITGUARDIAN_API at the top of this file
-        if: ${{ !github.event.pull_request.head.repo.fork }}
+      - name: Run functional tests (non-API)
         shell: bash
         run: |
           make functest
         env:
+          FUNCTEST_ARGS: '-m "not uses_gitguardian_api"'
+
+  functest_api:
+    name: Functional tests (API)
+    # See note about steps requiring the GITGUARDIAN_API at the top of this file
+    if: ${{ !github.event.pull_request.head.repo.fork }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Get enough commits to run `ggshield secret scan commit-range` on ourselves
+          fetch-depth: 10
+
+      - name: Install uv and set the Python version
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.DEFAULT_PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked --group dev --group tests
+
+      - name: Run functional tests (API)
+        shell: bash
+        run: |
+          make functest
+        env:
+          FUNCTEST_ARGS: '-m "uses_gitguardian_api"'
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
           GITGUARDIAN_API_URL: ${{ secrets.GITGUARDIAN_API_URL }}
           TEST_KNOWN_SECRET: ${{ secrets.TEST_KNOWN_SECRET }}

@@ -24,7 +24,7 @@ unittest:
 	uv run pytest --disable-pytest-warnings -vvv tests/unit
 
 functest:
-	scripts/run-functional-tests
+	scripts/run-functional-tests $(FUNCTEST_ARGS)
 
 coverage:
 	uv run coverage run --source ggshield -m pytest --disable-pytest-warnings tests/unit
