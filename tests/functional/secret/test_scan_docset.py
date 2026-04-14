@@ -1,7 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from tests.conftest import GG_VALID_TOKEN
 from tests.functional.utils import run_ggshield_scan
+
+
+pytestmark = pytest.mark.uses_gitguardian_api
 
 
 def test_scan_docset_positive(tmp_path: Path) -> None:

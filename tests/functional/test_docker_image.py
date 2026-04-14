@@ -8,7 +8,12 @@ from tests.conftest import ROOT_DIR, skipwindows
 from tests.functional.conftest import REPO_PATH, requires_docker
 
 
-pytestmark = [requires_docker, skipwindows, pytest.mark.xdist_group("docker")]
+pytestmark = [
+    requires_docker,
+    skipwindows,
+    pytest.mark.xdist_group("docker"),
+    pytest.mark.uses_gitguardian_api,
+]
 
 
 def docker(cmd: str, *args: Any) -> None:

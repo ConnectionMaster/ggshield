@@ -9,6 +9,9 @@ from tests.functional.utils import recreate_censored_content
 from tests.repository import Repository
 
 
+pytestmark = pytest.mark.uses_gitguardian_api
+
+
 HOOK_CONTENT = """#!/bin/sh
 set -e
 ggshield secret scan pre-receive

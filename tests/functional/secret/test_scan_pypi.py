@@ -5,6 +5,9 @@ import pytest
 from tests.functional.utils import run_ggshield_scan
 
 
+pytestmark = pytest.mark.uses_gitguardian_api
+
+
 @pytest.mark.parametrize(
     "package, expected_code",
     (

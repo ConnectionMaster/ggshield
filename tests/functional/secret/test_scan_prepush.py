@@ -8,6 +8,9 @@ from tests.functional.utils import recreate_censored_content, run_ggshield
 from tests.repository import Repository
 
 
+pytestmark = pytest.mark.uses_gitguardian_api
+
+
 def test_scan_prepush(tmp_path: Path) -> None:
     # GIVEN a remote repository
     remote_repo = Repository.create(tmp_path / "remote", bare=True)
