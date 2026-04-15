@@ -6,15 +6,37 @@ from typing import Any, Dict, List, Sequence, Set
 from notifypy import Notify
 
 from ggshield.core.filter import censor_match
+from ggshield.core.scan import ScannerProtocol
+from ggshield.core.scan import SecretProtocol as Secret
 from ggshield.core.scanner_ui import create_message_only_scanner_ui
 from ggshield.core.text_utils import pluralize, translate_validity
-from ggshield.verticals.secret import SecretScanner
-from ggshield.verticals.secret.ai_hook.copilot import Copilot
-from ggshield.verticals.secret.secret_scan_collection import Secret
 
-from .claude_code import Claude
-from .cursor import Cursor
-from .models import EventType, Flavor, Payload, Result, Tool
+from .agents import Claude, Copilot, Cursor
+from .models import Agent, EventType, HookPayload, HookResult, Tool
+
+
+HOOK_NAME_TO_EVENT_TYPE = {
+    "userpromptsubmit": EventType.USER_PROMPT,
+    "beforesubmitprompt": EventType.USER_PROMPT,
+    "pretooluse": EventType.PRE_TOOL_USE,
+    "posttooluse": EventType.POST_TOOL_USE,
+}
+
+TOOL_NAME_TO_TOOL = {
+    "shell": Tool.BASH,  # Cursor
+    "bash": Tool.BASH,  # Claude Code
+    "run_in_terminal": Tool.BASH,  # Copilot
+    "read": Tool.READ,  # Claude/Cursor
+    "read_file": Tool.READ,  # Copilot
+}
+
+
+def lookup(data: Dict[str, Any], keys: Sequence[str], default: Any = None) -> Any:
+    """Returns the value of the first key found in a dictionary."""
+    for key in keys:
+        if key in data:
+            return data[key]
+    return default
 
 
 # Regex (and method) to look for any @file_path in the prompt.
@@ -41,12 +63,121 @@ def find_filepaths(prompt: str) -> Set[str]:
     return paths
 
 
+def parse_hook_input(raw_content: str) -> list[HookPayload]:
+    """Parse the input content. Raises a ValueError if the input is not valid.
+
+    Returns:
+        A list of payloads. Most of the time the list will contain only one payload,
+        but in some cases files mentioned in the prompt will be read but the
+        PreToolUse event will not be called. So we need to handle this case ourselves.
+    """
+    # Parse the content as JSON
+    if not raw_content.strip():
+        raise ValueError("Error: No input received on stdin")
+    try:
+        data = json.loads(raw_content)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Error: Failed to parse JSON from stdin: {e}") from e
+
+    payloads = []
+
+    # Try to guess which AI coding assistant is calling us
+    agent = _detect_agent(data)
+
+    # Infer the event type
+    event_name = lookup(data, ["hook_event_name", "hookEventName"], None)
+    if event_name is None:
+        raise ValueError("Error: couldn't find event type")
+    event_type = HOOK_NAME_TO_EVENT_TYPE.get(event_name.lower(), EventType.OTHER)
+
+    identifier = ""
+    content = ""
+    tool = None
+
+    # Extract the identifier and content based on the event type
+    if event_type == EventType.USER_PROMPT:
+        content = data.get("prompt", "")
+        # Look for files mentioned in the prompt that could be read
+        # without triggering a PRE_TOOL_USE event.
+        payloads.extend(_parse_user_prompt(content, event_type, agent))
+
+    elif event_type == EventType.PRE_TOOL_USE:
+        tool_name = data.get("tool_name", "").lower()
+        tool = TOOL_NAME_TO_TOOL.get(tool_name, Tool.OTHER)
+        tool_input = data.get("tool_input", {})
+        # Select the content based on the tool
+        if tool == Tool.BASH:
+            content = tool_input.get("command", "")
+            identifier = content
+        elif tool == Tool.READ:
+            # We only need to deal with the identifier, the content will be read by the Scannable
+            identifier = lookup(tool_input, ["file_path", "filePath"], "")
+
+    elif event_type == EventType.POST_TOOL_USE:
+        tool_name = data.get("tool_name", "").lower()
+        tool = TOOL_NAME_TO_TOOL.get(tool_name, Tool.OTHER)
+        content = data.get("tool_output", "") or data.get("tool_response", {})
+        # Claude Code returns a dict for the tool output
+        if isinstance(content, (dict, list)):
+            content = json.dumps(content)
+
+    # If identifier was not set, hash the content
+    if not identifier:
+        identifier = hashlib.sha256((content or "").encode()).hexdigest()
+
+    payloads.append(
+        HookPayload(
+            event_type=event_type,
+            tool=tool,
+            content=content,
+            identifier=identifier,
+            agent=agent,
+        )
+    )
+    return payloads
+
+
+def _detect_agent(data: Dict[str, Any]) -> Agent:
+    """Detect the AI code assistant."""
+    if "cursor_version" in data:
+        return Cursor()
+    elif "github.copilot-chat" in data.get("transcript_path", "").lower():
+        return Copilot()
+    # no .lower() here to reduce the risk of false positives (this is also why this check is last)
+    elif "session_id" in data and "claude" in data.get("transcript_path", ""):
+        return Claude()
+    # No other agent is supported yet
+    raise ValueError("Unsupported agent")
+
+
+def _parse_user_prompt(
+    content: str, event_type: EventType, agent: Agent
+) -> List[HookPayload]:
+    """Parse the user prompt for additional payloads that we may miss."""
+    payloads = []
+    # Scenario 1 (the only one we know about so far):
+    # Code assistants don't always trigger a PRE_TOOL_USE event when
+    # a file is mentioned in the prompt, especially with an "@" prefix.
+    matches = find_filepaths(content)
+    for match in matches:
+        payloads.append(
+            HookPayload(
+                event_type=event_type,
+                tool=Tool.READ,
+                content="",
+                identifier=match,
+                agent=agent,
+            )
+        )
+    return payloads
+
+
 class AIHookScanner:
     """AI hook scanner.
 
     It is called with the payload of a hook event.
     Note that instead of having a base class with common method and a subclass per supported AI tool,
-    we instead have a single class which detects which protocol to use (called "flavor").
+    we instead have a single class which detects which protocol to use.
     This is because some tools sloppily support hooks from others. For instance,
     Cursor will call hooks defined in the Claude Code format, but send payload in its own format.
     So we can't assume which tool will call us based on the command line/hook configuration only.
@@ -55,98 +186,27 @@ class AIHookScanner:
         ValueError: If the input is not valid.
     """
 
-    def __init__(self, scanner: SecretScanner):
+    def __init__(self, scanner: ScannerProtocol):
         self.scanner = scanner
 
     def scan(self, content: str) -> int:
         """Scan the content, print the result and return the exit code."""
 
-        payloads = self._parse_input(content)
+        payloads = parse_hook_input(content)
         result = self._scan_payloads(payloads)
         payload = result.payload
 
         # Special case: in post-tool use, the action is already done: at least notify the user
         if result.block and payload.event_type == EventType.POST_TOOL_USE:
             self._send_secret_notification(
-                result.nbr_secrets, payload.tool or Tool.OTHER, payload.flavor.name
+                result.nbr_secrets,
+                payload.tool or Tool.OTHER,
+                payload.agent.display_name,
             )
 
-        return payload.flavor.output_result(result)
+        return payload.agent.output_result(result)
 
-    def _parse_input(self, raw_content: str) -> list[Payload]:
-        """Parse the input content. Raises a ValueError if the input is not valid.
-
-        Returns:
-            A list of payloads. Most of the time the list will contain only one payload,
-            but in some cases files mentioned in the prompt will be read but the
-            PreToolUse event will not be called. So we need to handle this case ourselves.
-        """
-        # Parse the content as JSON
-        if not raw_content.strip():
-            raise ValueError("Error: No input received on stdin")
-        try:
-            data = json.loads(raw_content)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Error: Failed to parse JSON from stdin: {e}") from e
-
-        payloads = []
-
-        # Try to guess which AI coding assistant is calling us
-        flavor = self._detect_flavor(data)
-
-        # Infer the event type
-        event_name = lookup(data, ["hook_event_name", "hookEventName"], None)
-        if event_name is None:
-            raise ValueError("Error: couldn't find event type")
-        event_type = HOOK_NAME_TO_EVENT_TYPE.get(event_name.lower(), EventType.OTHER)
-
-        identifier = ""
-        content = ""
-        tool = None
-
-        # Extract the identifier and content based on the event type
-        if event_type == EventType.USER_PROMPT:
-            content = data.get("prompt", "")
-            # Look for files mentioned in the prompt that could be read
-            # without triggering a PRE_TOOL_USE event.
-            payloads.extend(self._parse_user_prompt(content, event_type, flavor))
-
-        elif event_type == EventType.PRE_TOOL_USE:
-            tool_name = data.get("tool_name", "").lower()
-            tool = TOOL_NAME_TO_TOOL.get(tool_name, Tool.OTHER)
-            tool_input = data.get("tool_input", {})
-            # Select the content based on the tool
-            if tool == Tool.BASH:
-                content = tool_input.get("command", "")
-                identifier = content
-            elif tool == Tool.READ:
-                # We only need to deal with the identifier, the content will be read by the Scannable
-                identifier = lookup(tool_input, ["file_path", "filePath"], "")
-
-        elif event_type == EventType.POST_TOOL_USE:
-            tool_name = data.get("tool_name", "").lower()
-            tool = TOOL_NAME_TO_TOOL.get(tool_name, Tool.OTHER)
-            content = data.get("tool_output", "") or data.get("tool_response", {})
-            # Claude Code returns a dict for the tool output
-            if isinstance(content, (dict, list)):
-                content = json.dumps(content)
-
-        # If identifier was not set, hash the content
-        if not identifier:
-            identifier = hashlib.sha256((content or "").encode()).hexdigest()
-
-        payloads.append(
-            Payload(
-                event_type=event_type,
-                tool=tool,
-                content=content,
-                identifier=identifier,
-                flavor=flavor,
-            )
-        )
-        return payloads
-
-    def _scan_payloads(self, payloads: List[Payload]) -> Result:
+    def _scan_payloads(self, payloads: List[HookPayload]) -> HookResult:
         """Scan payloads for secrets using the SecretScanner.
 
         Returns:
@@ -159,16 +219,16 @@ class AIHookScanner:
             result = self._scan_content(payload)
             if result.block:
                 return result
-        return Result.allow(payloads[0])
+        return HookResult.allow(payloads[0])
 
     def _scan_content(
         self,
-        payload: Payload,
-    ) -> Result:
+        payload: HookPayload,
+    ) -> HookResult:
         """Scan content for secrets using the SecretScanner."""
         # Short path: if there is no content, no need to do an API call
         if payload.empty:
-            return Result.allow(payload)
+            return HookResult.allow(payload)
 
         with create_message_only_scanner_ui() as scanner_ui:
             results = self.scanner.scan([payload.scannable], scanner_ui=scanner_ui)
@@ -178,14 +238,14 @@ class AIHookScanner:
             secrets.extend(result.secrets)
 
         if not secrets:
-            return Result.allow(payload)
+            return HookResult.allow(payload)
 
         message = self._message_from_secrets(
             secrets,
             payload,
             escape_markdown=True,
         )
-        return Result(
+        return HookResult(
             block=True,
             message=message,
             nbr_secrets=len(secrets),
@@ -193,43 +253,10 @@ class AIHookScanner:
         )
 
     @staticmethod
-    def _detect_flavor(data: Dict[str, Any]) -> Flavor:
-        """Detect the AI code assistant."""
-        if "cursor_version" in data:
-            return Cursor()
-        elif "github.copilot-chat" in data.get("transcript_path", "").lower():
-            return Copilot()
-        # no .lower() here to reduce the risk of false positives (this is also why this check is last)
-        elif "session_id" in data and "claude" in data.get("transcript_path", ""):
-            return Claude()
-        else:
-            # Fallback that respect base conventions
-            return Flavor()
-
-    def _parse_user_prompt(
-        self, content: str, event_type: EventType, flavor: Flavor
-    ) -> List[Payload]:
-        """Parse the user prompt for additional payloads that we may miss."""
-        payloads = []
-        # Scenario 1 (the only one we know about so far):
-        # Code assistants don't always trigger a PRE_TOOL_USE event when
-        # a file is mentioned in the prompt, especially with an "@" prefix.
-        matches = find_filepaths(content)
-        for match in matches:
-            payloads.append(
-                Payload(
-                    event_type=event_type,
-                    tool=Tool.READ,
-                    content="",
-                    identifier=match,
-                    flavor=flavor,
-                )
-            )
-        return payloads
-
-    @staticmethod
     def _message_from_secrets(
-        secrets: List[Secret], payload: Payload, escape_markdown: bool = False
+        secrets: List[Secret],
+        payload: HookPayload,
+        escape_markdown: bool = False,
     ) -> str:
         """
         Format detected secrets into a user-friendly message.
@@ -308,27 +335,3 @@ class AIHookScanner:
             # This is best effort, we don't want to propagate an error
             # if the notification fails.
             pass
-
-
-HOOK_NAME_TO_EVENT_TYPE = {
-    "userpromptsubmit": EventType.USER_PROMPT,
-    "beforesubmitprompt": EventType.USER_PROMPT,
-    "pretooluse": EventType.PRE_TOOL_USE,
-    "posttooluse": EventType.POST_TOOL_USE,
-}
-
-TOOL_NAME_TO_TOOL = {
-    "shell": Tool.BASH,  # Cursor
-    "bash": Tool.BASH,  # Claude Code
-    "run_in_terminal": Tool.BASH,  # Copilot
-    "read": Tool.READ,  # Claude/Cursor
-    "read_file": Tool.READ,  # Copilot
-}
-
-
-def lookup(data: Dict[str, Any], keys: Sequence[str], default: Any = None) -> Any:
-    """Returns the value of the first key found in a dictionary."""
-    for key in keys:
-        if key in data:
-            return data[key]
-    return default

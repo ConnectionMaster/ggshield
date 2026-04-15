@@ -10,7 +10,7 @@ from ggshield.cmd.utils.common_options import add_common_options
 from ggshield.core.dirs import get_data_dir
 from ggshield.core.errors import UnexpectedError
 from ggshield.utils.git_shell import check_git_dir, git
-from ggshield.verticals.secret.ai_hook import AI_FLAVORS, install_hooks
+from ggshield.verticals.ai.installation import AGENTS, install_hooks
 
 
 # This snippet is used by the global hook to call the hook defined in the
@@ -39,7 +39,7 @@ fi
 @click.option(
     "--hook-type",
     "-t",
-    type=click.Choice(["pre-commit", "pre-push"] + list(AI_FLAVORS.keys())),
+    type=click.Choice(["pre-commit", "pre-push"] + list(AGENTS.keys())),
     help="Type of hook to install.",
     default="pre-commit",
 )
@@ -61,7 +61,7 @@ def install_cmd(
     It can also install ggshield as a Cursor IDE or Claude Code agent hook.
     """
 
-    if hook_type in AI_FLAVORS:
+    if hook_type in AGENTS:
         return install_hooks(name=hook_type, mode=mode, force=force)
 
     return_code = (

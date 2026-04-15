@@ -9,16 +9,7 @@ import click
 from ggshield.core.dirs import get_user_home_dir
 from ggshield.core.errors import UnexpectedError
 
-from .claude_code import Claude
-from .copilot import Copilot
-from .cursor import Cursor
-
-
-AI_FLAVORS = {
-    "cursor": Cursor,
-    "claude-code": Claude,
-    "copilot": Copilot,
-}
+from .agents import AGENTS
 
 
 @dataclass
@@ -41,12 +32,12 @@ def install_hooks(
     """
 
     try:
-        flavor = AI_FLAVORS[name]()
+        agent = AGENTS[name]
     except KeyError:
-        raise ValueError(f"Unsupported tool name: {name}")
+        raise ValueError(f"Unsupported agent: {name}")
 
     base_dir = get_user_home_dir() if mode == "global" else Path(".")
-    settings_path = base_dir / flavor.settings_path
+    settings_path = base_dir / agent.settings_path
 
     command = "ggshield secret scan ai-hook"
 
@@ -71,11 +62,11 @@ def install_hooks(
 
     stats = _fill_dict(
         config=existing_config,
-        template=flavor.settings_template,
+        template=agent.settings_template,
         command=command,
         overwrite=force,
         stats=stats,
-        locator=flavor.settings_locate,
+        locator=agent.settings_locate,
     )
 
     # Ensure parent directory exists
@@ -89,11 +80,11 @@ def install_hooks(
     # Report what happened
     styled_path = click.style(settings_path, fg="yellow", bold=True)
     if stats.added == 0 and stats.already_present > 0:
-        click.echo(f"{flavor.name} hooks already installed in {styled_path}")
+        click.echo(f"{agent.display_name} hooks already installed in {styled_path}")
     elif stats.added > 0 and stats.already_present > 0:
-        click.echo(f"{flavor.name} hooks updated in {styled_path}")
+        click.echo(f"{agent.display_name} hooks updated in {styled_path}")
     else:
-        click.echo(f"{flavor.name} hooks successfully added in {styled_path}")
+        click.echo(f"{agent.display_name} hooks successfully added in {styled_path}")
 
     return 0
 

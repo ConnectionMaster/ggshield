@@ -4,15 +4,21 @@ from typing import Any, Dict, List, Optional
 
 import click
 
-from .models import EventType, Flavor, Result
+from ..models import Agent, EventType, HookResult
 
 
-class Claude(Flavor):
+class Claude(Agent):
     """Behavior specific to Claude Code."""
 
-    name = "Claude Code"
+    @property
+    def name(self) -> str:
+        return "claude-code"
 
-    def output_result(self, result: Result) -> int:
+    @property
+    def display_name(self) -> str:
+        return "Claude Code"
+
+    def output_result(self, result: HookResult) -> int:
         response = {}
         if result.block:
             if result.payload.event_type in [

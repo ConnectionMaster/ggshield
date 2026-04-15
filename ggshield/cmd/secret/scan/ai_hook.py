@@ -10,9 +10,11 @@ from ggshield.cmd.utils.context_obj import ContextObj
 from ggshield.core import ui
 from ggshield.core.client import create_client_from_config
 from ggshield.core.scan import ScanContext, ScanMode
+from ggshield.verticals.ai.hooks import AIHookScanner
 from ggshield.verticals.secret import SecretScanner
-from ggshield.verticals.secret.ai_hook import AIHookScanner
-from ggshield.verticals.secret.ai_hook.models import MAX_READ_SIZE
+
+
+MAX_READ_SIZE = 1024 * 1024 * 10  # We restrict stdin read to 10MB
 
 
 @click.command()
