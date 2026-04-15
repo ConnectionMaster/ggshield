@@ -198,6 +198,7 @@ jobs:
     needs:
       - lint
       - build
+      - functest_api
       - test_github_secret_scan_action
     steps:
       - name: Login to Docker Hub

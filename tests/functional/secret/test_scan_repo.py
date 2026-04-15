@@ -1,6 +1,4 @@
 import json
-import os
-from unittest.mock import patch
 
 import jsonschema
 import pytest
@@ -8,9 +6,6 @@ import pytest
 from tests.conftest import GG_VALID_TOKEN
 from tests.functional.utils import recreate_censored_content, run_ggshield_scan
 from tests.repository import Repository
-
-
-pytestmark = pytest.mark.uses_gitguardian_api
 
 
 LEAK_CONTENT = f"password = {GG_VALID_TOKEN}"
@@ -35,6 +30,7 @@ def leaky_repo(tmp_path_factory: pytest.TempPathFactory) -> Repository:
     return repo
 
 
+@pytest.mark.uses_gitguardian_api
 def test_scan_repo(leaky_repo: Repository) -> None:
     # GIVEN a repository with a past commit containing a leak
     # WHEN scanning the repo
@@ -47,6 +43,7 @@ def test_scan_repo(leaky_repo: Repository) -> None:
     assert recreate_censored_content(LEAK_CONTENT, GG_VALID_TOKEN) in proc.stdout
 
 
+@pytest.mark.uses_gitguardian_api
 def test_scan_repo_json(leaky_repo: Repository, secret_json_schema) -> None:
     # GIVEN a repository with a past commit containing a leak
     # WHEN scanning the repo
@@ -60,22 +57,21 @@ def test_scan_repo_json(leaky_repo: Repository, secret_json_schema) -> None:
 
 
 def test_scan_repo_quota_limit_reached(
-    leaky_repo: Repository, no_quota_gitguardian_api: str, caplog
+    leaky_repo: Repository, no_quota_gitguardian_api: str, monkeypatch, caplog
 ) -> None:
     # GIVEN a repository with a past commit containing a leak
 
     # WHEN scanning the repo
     # THEN error code is 128
-    with patch.dict(
-        os.environ, {**os.environ, "GITGUARDIAN_API_URL": no_quota_gitguardian_api}
-    ):
-        proc = run_ggshield_scan(
-            "repo",
-            str(leaky_repo.path),
-            "--json",
-            expected_code=128,
-            cwd=leaky_repo.path,
-        )
+    monkeypatch.setenv("GITGUARDIAN_API_URL", no_quota_gitguardian_api)
+    monkeypatch.setenv("GITGUARDIAN_API_KEY", "dummy")
+    proc = run_ggshield_scan(
+        "repo",
+        str(leaky_repo.path),
+        "--json",
+        expected_code=128,
+        cwd=leaky_repo.path,
+    )
 
     # AND stderr contains an error message
     assert (
@@ -86,6 +82,7 @@ def test_scan_repo_quota_limit_reached(
     assert proc.stdout.strip() == ""
 
 
+@pytest.mark.uses_gitguardian_api
 def test_scan_repo_exclude_patterns(
     leaky_repo: Repository,
 ) -> None:
