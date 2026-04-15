@@ -9,15 +9,13 @@ from tests.functional.utils import recreate_censored_content
 from tests.repository import Repository
 
 
-pytestmark = pytest.mark.uses_gitguardian_api
-
-
 HOOK_CONTENT = """#!/bin/sh
 set -e
 ggshield secret scan pre-receive
 """
 
 
+@pytest.mark.uses_gitguardian_api
 def test_scan_prereceive(tmp_path: Path) -> None:
     # GIVEN a remote repository
     remote_repo = Repository.create(tmp_path / "remote", bare=True)
@@ -47,6 +45,7 @@ def test_scan_prereceive(tmp_path: Path) -> None:
     assert recreate_censored_content(secret_content, GG_VALID_TOKEN) in stderr
 
 
+@pytest.mark.uses_gitguardian_api
 def test_scan_prereceive_branch_without_new_commits(tmp_path: Path) -> None:
     # GIVEN a remote repository
     remote_repo = Repository.create(tmp_path / "remote", bare=True)
@@ -73,6 +72,7 @@ def test_scan_prereceive_branch_without_new_commits(tmp_path: Path) -> None:
     local_repo.push("-u", "origin", branch_name)
 
 
+@pytest.mark.uses_gitguardian_api
 def test_scan_prereceive_push_force(tmp_path: Path) -> None:
     # GIVEN a remote repository
     remote_repo = Repository.create(tmp_path / "remote", bare=True)
@@ -132,6 +132,7 @@ def test_scan_prereceive_timeout(
     with caplog.at_level(logging.WARNING):
         monkeypatch.setenv("GITGUARDIAN_API_URL", slow_gitguardian_api)
         monkeypatch.delenv("GITGUARDIAN_INSTANCE", raising=False)
+        monkeypatch.setenv("GITGUARDIAN_API_KEY", "dummy")
         local_repo.push()
 
     # AND the error message contains timeout message
