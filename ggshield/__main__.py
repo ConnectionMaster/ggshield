@@ -10,6 +10,7 @@ from typing import Any, List, Optional
 import click
 
 from ggshield import __version__
+from ggshield.cmd.ai import ai_group
 from ggshield.cmd.auth import auth_group
 from ggshield.cmd.config import config_group
 from ggshield.cmd.hmsl import hmsl_group
@@ -88,6 +89,7 @@ def _load_plugins() -> PluginRegistry:
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     commands={
+        "ai": ai_group,
         "auth": auth_group,
         "config": config_group,
         "plugin": plugin_group,

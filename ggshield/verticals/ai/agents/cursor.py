@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import click
+
+from ggshield.core.dirs import get_user_home_dir
 
 from ..models import Agent, EventType, HookResult
 
@@ -17,6 +19,10 @@ class Cursor(Agent):
     @property
     def display_name(self) -> str:
         return "Cursor"
+
+    @property
+    def config_folder(self) -> Path:
+        return get_user_home_dir() / ".cursor"
 
     def output_result(self, result: HookResult) -> int:
         response = {}
@@ -62,3 +68,15 @@ class Cursor(Agent):
             if "ggshield" in command or "<COMMAND>" in command:
                 return obj
         return None
+
+    def project_mcp_file(self, directory: Path) -> Path:
+        return directory / ".cursor" / "mcp.json"
+
+    def discover_project_directories(self) -> Iterator[Path]:
+        # Because Cursor is based on VS Code, we can reuse the same logic than Copilot.
+        user_folder = get_user_home_dir() / ".config" / "Cursor" / "User"
+        for file in user_folder.glob("workspaceStorage/*/workspace.json"):
+            if (data := self._load_json_file(file)) and "folder" in data:
+                path = Path(data["folder"].removeprefix("file://"))
+                if path.is_dir():
+                    yield path.resolve()

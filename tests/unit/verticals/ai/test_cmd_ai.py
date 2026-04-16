@@ -1,8 +1,21 @@
+import json
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
+from pygitguardian.models import AIDiscovery, UserInfo
 
 from ggshield.__main__ import cli
+from ggshield.core.errors import APIKeyCheckError
+
+
+def _user():
+    return UserInfo(
+        hostname="host", username="user", machine_id="mid", user_email="u@e.com"
+    )
+
+
+def _discovery():
+    return AIDiscovery(user=_user(), servers=[], discovery_duration=0.1)
 
 
 # ---------------------------------------------------------------------------
@@ -75,3 +88,87 @@ class TestAiHookCmd:
         )
 
         assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# ggshield ai discover
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverCmd:
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+        return_value=_discovery(),
+    )
+    @patch("ggshield.cmd.ai.discover.create_client_from_config")
+    @patch(
+        "ggshield.cmd.ai.discover.submit_ai_discovery",
+        return_value=_discovery(),
+    )
+    def test_default_output(
+        self,
+        mock_save: MagicMock,
+        mock_submit: MagicMock,
+        mock_client: MagicMock,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover"])
+
+        assert result.exit_code == 0
+
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+        return_value=_discovery(),
+    )
+    @patch("ggshield.cmd.ai.discover.create_client_from_config")
+    @patch(
+        "ggshield.cmd.ai.discover.submit_ai_discovery",
+        return_value=_discovery(),
+    )
+    def test_json_flag(
+        self,
+        mock_save: MagicMock,
+        mock_submit: MagicMock,
+        mock_client: MagicMock,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover", "--json"])
+
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert "user" in parsed
+
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+        return_value=_discovery(),
+    )
+    @patch(
+        "ggshield.cmd.ai.discover.create_client_from_config",
+        side_effect=APIKeyCheckError("https://api.gitguardian.com", "no key"),
+    )
+    def test_auth_failure_shows_warning(
+        self, mock_client: MagicMock, mock_discover: MagicMock
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover"])
+
+        assert result.exit_code == 0
+        assert "Skipping upload" in result.output or "warning" in result.output.lower()
+
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+        return_value=_discovery(),
+    )
+    @patch("ggshield.cmd.ai.discover.create_client_from_config")
+    @patch(
+        "ggshield.cmd.ai.discover.submit_ai_discovery",
+        side_effect=RuntimeError("API error"),
+    )
+    def test_api_submission_failure_shows_warning(
+        self, mock_submit: MagicMock, mock_client: MagicMock, mock_discover: MagicMock
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover"])
+
+        assert result.exit_code == 0
+        assert "Could not upload" in result.output or "warning" in result.output.lower()
