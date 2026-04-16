@@ -1,11 +1,31 @@
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
-from ggshield.verticals.ai.agents.claude_code import Claude
-from ggshield.verticals.ai.agents.cursor import Cursor
-from ggshield.verticals.ai.models import MCPConfiguration, MCPServer, Scope, Transport
+import pytest
+from pygitguardian.models import MCPToolInfo, UserInfo
+
+from ggshield.verticals.ai.agents.claude_code import Claude, _mangle_server_name
+from ggshield.verticals.ai.agents.copilot import Copilot
+from ggshield.verticals.ai.agents.cursor import Cursor, _parse_tool_arguments
+from ggshield.verticals.ai.models import (
+    Agent,
+    AIDiscovery,
+    EventType,
+    HookPayload,
+    MCPConfiguration,
+    MCPServer,
+    Scope,
+    Tool,
+    Transport,
+)
+
+
+def _user() -> UserInfo:
+    return UserInfo(
+        hostname="host", username="user", machine_id="mid", user_email="u@e.com"
+    )
 
 
 def _cfg(
@@ -20,6 +40,23 @@ def _cfg(
         scope=scope,
         transport=Transport.STDIO,
         project=str(project) if project else None,
+    )
+
+
+def _ai_discovery(servers: Optional[List[MCPServer]] = None) -> AIDiscovery:
+    return AIDiscovery(user=_user(), servers=servers or [], discovery_duration=0.1)
+
+
+def _payload(
+    agent: Agent, raw: Optional[Dict[str, Any]] = None, tool: Tool = Tool.MCP
+) -> HookPayload:
+    return HookPayload(
+        event_type=EventType.PRE_TOOL_USE,
+        tool=tool,
+        content="",
+        identifier="",
+        agent=agent,
+        raw=raw or {},
     )
 
 
@@ -176,6 +213,44 @@ class TestCursorDiscoverProjectDirectories:
         assert dirs == []
 
 
+class TestCursorParseMcpActivity:
+    def test_strips_mcp_prefix_and_maps_server(self):
+        cursor = Cursor()
+        tool_info = MCPToolInfo(name="run_query")
+        server = MCPServer(
+            name="my-db-server",
+            tools=[tool_info],
+            configurations=[_cfg(name="db", agent="cursor")],
+        )
+        discovery = _ai_discovery(servers=[server])
+        payload = _payload(
+            cursor,
+            raw={
+                "tool_name": "MCP:run_query",
+                "model": "gpt-4",
+                "workspace_roots": ["/home/user/proj"],
+                "tool_input": {"sql": "SELECT 1"},
+            },
+        )
+
+        req = cursor.parse_mcp_activity(payload, discovery)
+
+        assert req.tool == "run_query"
+        assert req.server == "my-db-server"
+        assert req.model == "gpt-4"
+        assert req.input == {"sql": "SELECT 1"}
+
+    def test_unknown_tool_returns_empty_server(self):
+        cursor = Cursor()
+        discovery = _ai_discovery(servers=[])
+        payload = _payload(cursor, raw={"tool_name": "MCP:unknown"})
+
+        req = cursor.parse_mcp_activity(payload, discovery)
+
+        assert req.tool == "unknown"
+        assert req.server == ""
+
+
 # ===========================================================================
 # Claude Code
 # ===========================================================================
@@ -251,3 +326,165 @@ class TestClaudeDiscoverProjectDirectories:
             dirs = list(claude.discover_project_directories())
 
         assert dirs == []
+
+
+class TestClaudeParseMcpActivity:
+    def test_parses_mcp_double_underscore_format(self):
+        claude = Claude()
+        cfg = _cfg(name="my.server", agent="claude-code")
+        server = MCPServer(
+            name="my.server", configurations=[cfg], tools=[MCPToolInfo(name="run")]
+        )
+        discovery = _ai_discovery(servers=[server])
+        # Claude mangles "my.server" → "my_server" in the tool name
+        payload = _payload(
+            claude,
+            raw={"tool_name": "mcp__my_server__run", "cwd": "/tmp", "tool_input": {}},
+        )
+
+        req = claude.parse_mcp_activity(payload, discovery)
+
+        assert req.tool == "run"
+        assert req.server == "my.server"
+
+    def test_server_with_double_underscore_handled(self):
+        claude = Claude()
+        discovery = _ai_discovery(servers=[])
+        payload = _payload(
+            claude,
+            raw={
+                "tool_name": "mcp__a__b__tool_name",
+                "cwd": "/tmp",
+                "tool_input": {},
+            },
+        )
+
+        req = claude.parse_mcp_activity(payload, discovery)
+
+        assert req.tool == "tool_name"
+        assert req.server == "a__b"  # falls back to mangled name
+
+    def test_fallback_to_mangled_name(self):
+        claude = Claude()
+        discovery = _ai_discovery(servers=[])
+        payload = _payload(
+            claude,
+            raw={"tool_name": "mcp__unknown__do_it", "cwd": "/tmp", "tool_input": {}},
+        )
+
+        req = claude.parse_mcp_activity(payload, discovery)
+
+        assert req.server == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# _mangle_server_name
+# ---------------------------------------------------------------------------
+
+
+class TestMangleServerName:
+    @pytest.mark.parametrize(
+        "name, expected",
+        [
+            pytest.param("my-seRver-123", "my-seRver-123", id="alphanumeric_dashes"),
+            pytest.param(
+                "my.server/v2 alpha", "my_server_v2_alpha", id="special_chars"
+            ),
+            pytest.param("simple", "simple", id="plain_alpha"),
+            pytest.param("a@b#c", "a_b_c", id="symbols"),
+        ],
+    )
+    def test_mangle_server_name(self, name: str, expected: str):
+        assert _mangle_server_name(name) == expected
+
+
+# ===========================================================================
+# Copilot
+# ===========================================================================
+
+
+class TestCopilotParseMcpActivity:
+    def test_simple_server_tool_split(self):
+        copilot = Copilot()
+        cfg = _cfg(name="myserver", agent="copilot")
+        server = MCPServer(name="othername", configurations=[cfg])
+        discovery = _ai_discovery(servers=[server])
+        payload = _payload(
+            copilot,
+            raw={"tool_name": "mcp_myserver_mytool", "cwd": "/tmp", "tool_input": {}},
+        )
+
+        req = copilot.parse_mcp_activity(payload, discovery)
+
+        assert req.tool == "mytool"
+        assert req.server == "othername"
+
+    def test_multiple_underscores(self):
+        """Tools with underscores in their name are supported."""
+        copilot = Copilot()
+        discovery = _ai_discovery(servers=[])
+        payload = _payload(
+            copilot,
+            raw={
+                "tool_name": "mcp_server_tool_name_extra",
+                "cwd": "/tmp",
+                "tool_input": {},
+            },
+        )
+
+        req = copilot.parse_mcp_activity(payload, discovery)
+        assert req.server == "server"
+        assert req.tool == "tool_name_extra"
+
+    def test_unknown_server_falls_back_to_cfg_name(self):
+        copilot = Copilot()
+        discovery = _ai_discovery(servers=[])
+        payload = _payload(
+            copilot,
+            raw={"tool_name": "mcp_unknown_tool", "cwd": "/tmp", "tool_input": {}},
+        )
+
+        req = copilot.parse_mcp_activity(payload, discovery)
+
+        assert req.server == "unknown"
+        assert req.tool == "tool"
+
+
+# ===========================================================================
+# _parse_tool_arguments (Cursor helper)
+# ===========================================================================
+
+
+class TestParseToolArguments:
+    def test_valid_schema(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "SQL query"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["query"],
+        }
+        result = _parse_tool_arguments(schema)
+        assert result is not None
+        assert len(result) == 2
+        q = next(a for a in result if a.name == "query")
+        assert q.required is True
+        assert q.description == "SQL query"
+        lim = next(a for a in result if a.name == "limit")
+        assert lim.required is False
+
+    def test_empty_properties_returns_none(self):
+        schema = {"type": "object", "properties": {}}
+        assert _parse_tool_arguments(schema) is None
+
+    @pytest.mark.parametrize(
+        "schema",
+        [
+            pytest.param(None, id="none"),
+            pytest.param("string", id="string"),
+            pytest.param(42, id="integer"),
+        ],
+    )
+    def test_non_dict_schema_returns_none(self, schema: Any):
+        assert _parse_tool_arguments(schema) is None

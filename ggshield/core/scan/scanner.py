@@ -6,6 +6,7 @@ so that other verticals can use the scanner if they are provided one.
 from collections.abc import Sequence
 from typing import Iterable, Optional, Protocol
 
+from pygitguardian import GGClient
 from pygitguardian.models import Match
 
 from ggshield.core.scanner_ui import ScannerUI
@@ -41,6 +42,9 @@ class ResultsProtocol(Protocol):
 
 class ScannerProtocol(Protocol):
     """Protocol for scanners."""
+
+    @property
+    def client(self) -> GGClient: ...
 
     def scan(
         self,

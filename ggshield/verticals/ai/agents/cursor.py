@@ -4,6 +4,8 @@ from typing import Any, Dict, Iterator, List, Optional
 
 import click
 from pygitguardian.models import (
+    AIDiscovery,
+    MCPActivityRequest,
     MCPArgumentInfo,
     MCPPromptInfo,
     MCPResourceInfo,
@@ -12,7 +14,7 @@ from pygitguardian.models import (
 
 from ggshield.core.dirs import get_user_home_dir
 
-from ..models import Agent, EventType, HookResult, MCPServer
+from ..models import Agent, EventType, HookPayload, HookResult, MCPServer
 
 
 class Cursor(Agent):
@@ -171,6 +173,34 @@ class Cursor(Agent):
                 return True
 
         return False
+
+    def parse_mcp_activity(
+        self, payload: HookPayload, ai_config: AIDiscovery
+    ) -> MCPActivityRequest:
+        """Parse the MCP activity from an MCP hook payload."""
+
+        # Cursor only sends the MCP tool, not the server.
+        # Fortunately, we should have been able to discover the tools earlier.
+
+        tools_to_server = {}
+        for server in ai_config.servers:
+            for tool in server.tools:
+                # Hopefully we won't have duplicates
+                tools_to_server[tool.name] = server.name
+
+        raw_tool_name: str = payload.raw.get("tool_name", "")
+        tool_name = raw_tool_name.removeprefix("MCP:")
+        server_name = tools_to_server.get(tool_name, "")
+
+        return MCPActivityRequest(
+            user=ai_config.user,
+            tool=tool_name,
+            server=server_name,
+            agent=self.name,
+            model=payload.raw.get("model", ""),
+            cwd=payload.raw.get("workspace_roots", [""])[0],
+            input=payload.raw.get("tool_input", {}),
+        )
 
 
 def _parse_tool_arguments(

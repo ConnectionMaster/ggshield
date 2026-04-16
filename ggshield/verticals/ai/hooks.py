@@ -10,6 +10,7 @@ from ggshield.core.scan import ScannerProtocol
 from ggshield.core.scan import SecretProtocol as Secret
 from ggshield.core.scanner_ui import create_message_only_scanner_ui
 from ggshield.core.text_utils import pluralize, translate_validity
+from ggshield.verticals.ai.mcp import send_mcp_activity
 
 from .agents import Claude, Copilot, Cursor
 from .models import Agent, EventType, HookPayload, HookResult, Tool
@@ -102,8 +103,7 @@ def parse_hook_input(raw_content: str) -> list[HookPayload]:
         payloads.extend(_parse_user_prompt(content, event_type, agent))
 
     elif event_type == EventType.PRE_TOOL_USE:
-        tool_name = data.get("tool_name", "").lower()
-        tool = TOOL_NAME_TO_TOOL.get(tool_name, Tool.OTHER)
+        tool = _parse_tool(data)
         tool_input = data.get("tool_input", {})
         # Select the content based on the tool
         if tool == Tool.BASH:
@@ -114,8 +114,7 @@ def parse_hook_input(raw_content: str) -> list[HookPayload]:
             identifier = lookup(tool_input, ["file_path", "filePath"], "")
 
     elif event_type == EventType.POST_TOOL_USE:
-        tool_name = data.get("tool_name", "").lower()
-        tool = TOOL_NAME_TO_TOOL.get(tool_name, Tool.OTHER)
+        tool = _parse_tool(data)
         content = data.get("tool_output", "") or data.get("tool_response", {})
         # Claude Code returns a dict for the tool output
         if isinstance(content, (dict, list)):
@@ -132,9 +131,18 @@ def parse_hook_input(raw_content: str) -> list[HookPayload]:
             content=content,
             identifier=identifier,
             agent=agent,
+            raw=data,
         )
     )
     return payloads
+
+
+def _parse_tool(data: Dict[str, Any]) -> Tool:
+    """Parse the tool name."""
+    tool_name = data.get("tool_name", "").lower()
+    if tool_name.startswith("mcp"):
+        return Tool.MCP
+    return TOOL_NAME_TO_TOOL.get(tool_name, Tool.OTHER)
 
 
 def _detect_agent(data: Dict[str, Any]) -> Agent:
@@ -167,6 +175,7 @@ def _parse_user_prompt(
                 content="",
                 identifier=match,
                 agent=agent,
+                raw={},
             )
         )
     return payloads
@@ -207,7 +216,7 @@ class AIHookScanner:
         return payload.agent.output_result(result)
 
     def _scan_payloads(self, payloads: List[HookPayload]) -> HookResult:
-        """Scan payloads for secrets using the SecretScanner.
+        """Scan payloads. Scan for secrets and log MCP activity.
 
         Returns:
             The result of the first blocking payload, or a non-blocking result.
@@ -216,10 +225,26 @@ class AIHookScanner:
         if not payloads:
             raise ValueError("Error: no payloads to scan")
         for payload in payloads:
+            # Scan for secrets first
             result = self._scan_content(payload)
             if result.block:
                 return result
+            # We only send the MCP activity if the payload wasn't already blocked.
+            result = self._send_mcp_activity(payload)
+            if result.block:
+                return result
         return HookResult.allow(payloads[0])
+
+    def _send_mcp_activity(self, payload: HookPayload) -> HookResult:
+        """Send MCP activity to the GitGuardian API."""
+        # This works even if the payload is not an MCP pre-tool use.
+        result = send_mcp_activity(self.scanner.client, payload)
+        return HookResult(
+            block=not result.allowed,
+            message=result.reason,
+            nbr_secrets=0,
+            payload=payload,
+        )
 
     def _scan_content(
         self,

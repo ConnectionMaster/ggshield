@@ -5,10 +5,13 @@ from typing import List, Set
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pygitguardian import GGClient
+from pygitguardian.models import MCPActivityResponse
 
 from ggshield.utils.git_shell import Filemode
 from ggshield.verticals.ai.agents import Claude, Copilot, Cursor
 from ggshield.verticals.ai.hooks import AIHookScanner, find_filepaths, parse_hook_input
+from ggshield.verticals.ai.mcp import send_mcp_activity
 from ggshield.verticals.ai.models import EventType, HookPayload, HookResult, Tool
 from ggshield.verticals.secret import SecretScanner
 from ggshield.verticals.secret.secret_scan_collection import Result as ScanResult
@@ -22,6 +25,7 @@ def _dummy_payload(event_type: EventType = EventType.OTHER) -> HookPayload:
         content="",
         identifier="",
         agent=Cursor(),
+        raw={},
     )
 
 
@@ -36,6 +40,7 @@ def tmp_file(tmp_path: Path) -> Path:
 def _mock_scanner(matches: List[str]) -> MagicMock:
     """Create a mock SecretScanner that returns the given Results from scan()."""
     mock = MagicMock(spec=SecretScanner)
+    mock.client = MagicMock(spec=GGClient)
     scan_result = Results(
         results=[
             ScanResult(
@@ -88,6 +93,7 @@ class TestAIHookScannerScanContent:
             content="safe content",
             identifier="id",
             agent=Cursor(),
+            raw={},
         )
         result = hook_scanner._scan_content(payload)
         assert isinstance(result, HookResult)
@@ -104,6 +110,7 @@ class TestAIHookScannerScanContent:
             content="content with sk-xxx",
             identifier="id",
             agent=Cursor(),
+            raw={},
         )
         result = hook_scanner._scan_content(payload)
         assert isinstance(result, HookResult)
@@ -193,6 +200,58 @@ class TestAIHookScannerScan:
             scanner._scan_payloads([])
 
 
+class TestMCPActivity:
+    """Unit tests for MCP activity handling."""
+
+    @pytest.mark.parametrize(
+        "event_type, tool",
+        [
+            (EventType.USER_PROMPT, None),
+            (EventType.POST_TOOL_USE, Tool.MCP),
+            (EventType.PRE_TOOL_USE, Tool.BASH),
+            (EventType.OTHER, None),
+        ],
+    )
+    def test_send_mcp_activity_early_returns_for_non_mcp_pre_tool_use(
+        self, event_type: EventType, tool: Tool
+    ):
+        """send_mcp_activity returns allowed=True without calling the API
+        when the payload is not an MCP PreToolUse."""
+        client = MagicMock(spec=GGClient)
+        payload = HookPayload(
+            event_type=event_type,
+            tool=tool,
+            content="some content",
+            identifier="id",
+            agent=Cursor(),
+            raw={},
+        )
+        result = send_mcp_activity(client, payload)
+        assert isinstance(result, MCPActivityResponse)
+        assert result.allowed is True
+        assert result.reason == ""
+        client.post.assert_not_called()
+
+    @patch("ggshield.verticals.ai.hooks.send_mcp_activity")
+    def test_scan_calls_send_mcp_activity_for_mcp_pre_tool_use(
+        self, mock_send_mcp: MagicMock
+    ):
+        """AIHookScanner.scan() calls send_mcp_activity when the payload is an MCP PreToolUse."""
+        mock_send_mcp.return_value = MCPActivityResponse(allowed=True, reason="")
+        scanner = AIHookScanner(_mock_scanner([]))
+        data = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "mcp__some_server__some_tool",
+            "tool_input": {"arg": "value"},
+            "cursor_version": "2.5.25",
+        }
+        scanner.scan(json.dumps(data))
+        mock_send_mcp.assert_called_once()
+        call_payload = mock_send_mcp.call_args[0][1]
+        assert call_payload.event_type == EventType.PRE_TOOL_USE
+        assert call_payload.tool == Tool.MCP
+
+
 class TestMessageFromSecrets:
     """Unit tests for AIHookScanner._message_from_secrets with different payload types."""
 
@@ -204,6 +263,7 @@ class TestMessageFromSecrets:
             content="echo sk-xxx",
             identifier="echo sk-xxx",
             agent=Cursor(),
+            raw={},
         )
         message = AIHookScanner._message_from_secrets([_make_secret("sk-xxx")], payload)
         assert "remove the secrets from the command" in message
@@ -217,6 +277,7 @@ class TestMessageFromSecrets:
             content="file content with secret",
             identifier="/path/to/file",
             agent=Cursor(),
+            raw={},
         )
         message = AIHookScanner._message_from_secrets([_make_secret("sk-xxx")], payload)
         assert "remove the secrets from" in message
@@ -229,6 +290,7 @@ class TestMessageFromSecrets:
             content="some content",
             identifier="id",
             agent=Cursor(),
+            raw={},
         )
         message = AIHookScanner._message_from_secrets([_make_secret("sk-xxx")], payload)
         assert "remove the secrets from the tool input" in message
@@ -241,6 +303,7 @@ class TestMessageFromSecrets:
             content="content",
             identifier="id",
             agent=Cursor(),
+            raw={},
         )
         message = AIHookScanner._message_from_secrets(
             [_make_secret("sk-xxx")], payload, escape_markdown=True
