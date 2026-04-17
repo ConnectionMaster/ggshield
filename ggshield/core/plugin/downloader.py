@@ -23,28 +23,39 @@ from ggshield.core.plugin.client import (
 )
 from ggshield.core.plugin.signature import (
     SignatureInfo,
+    SignatureStatus,
     SignatureVerificationError,
     SignatureVerificationMode,
     verify_wheel_signature,
 )
+from ggshield.core.plugin.trust import PluginTrustStore
 from ggshield.core.plugin.wheel_utils import WheelError, extract_wheel_metadata
 
 
 logger = logging.getLogger(__name__)
 
 
-def get_signature_label(manifest: Dict[str, Any]) -> Optional[str]:
-    """Get a human-readable signature status label from a manifest.
-
-    Returns a string like "valid (GitGuardian/satori)", "missing", etc.
-    or None if no signature info is in the manifest.
-    """
+def get_signature_label(
+    manifest: Dict[str, Any],
+    *,
+    trusted_unsigned: bool = False,
+) -> Optional[str]:
+    """Get a human-readable signature status label from a manifest."""
     sig_info = manifest.get("signature")
     if not sig_info:
         return None
 
     status = sig_info.get("status", "unknown")
     identity = sig_info.get("identity")
+
+    if status == SignatureStatus.VALID.value:
+        if identity:
+            return f"signed ({identity})"
+        return "signed"
+
+    if trusted_unsigned:
+        return "unsigned (trusted)"
+
     if identity:
         return f"{status} ({identity})"
     return status
@@ -84,6 +95,7 @@ class PluginDownloader:
 
     def __init__(self) -> None:
         self.plugins_dir = get_plugins_dir(create=True)
+        self.trust_store = PluginTrustStore(plugins_dir=self.plugins_dir)
 
     def download_and_install(
         self,
@@ -116,6 +128,10 @@ class PluginDownloader:
             if computed_hash.lower() != download_info.sha256.lower():
                 raise ChecksumMismatchError(download_info.sha256, computed_hash)
 
+            # Remove any stale bundle sidecars for this wheel name before
+            # writing the new wheel/bundle pair.
+            self._remove_bundle_files(wheel_path)
+
             # Download signature bundle if available
             temp_path.rename(wheel_path)
             self._download_bundle(download_info, plugin_dir)
@@ -127,6 +143,10 @@ class PluginDownloader:
             if source is None:
                 source = PluginSource(type=PluginSourceType.GITGUARDIAN_API)
 
+            # Sync trust record before writing the manifest so a trust failure
+            # cannot leave an orphaned manifest pointing at a wheel we remove
+            # during cleanup.
+            self._sync_trust_record(plugin_name, download_info.sha256, sig_info)
             self._write_manifest(
                 plugin_dir=plugin_dir,
                 plugin_name=plugin_name,
@@ -190,6 +210,7 @@ class PluginDownloader:
 
         # Copy wheel to plugin directory
         dest_wheel_path = plugin_dir / wheel_path.name
+        self._remove_bundle_files(dest_wheel_path)
         shutil.copy2(wheel_path, dest_wheel_path)
 
         # Copy bundle if it exists alongside the wheel
@@ -212,6 +233,7 @@ class PluginDownloader:
             sha256=sha256,
         )
 
+        self._sync_trust_record(plugin_name, sha256, sig_info)
         self._write_manifest(
             plugin_dir=plugin_dir,
             plugin_name=plugin_name,
@@ -302,6 +324,7 @@ class PluginDownloader:
             plugin_dir.mkdir(parents=True, exist_ok=True)
 
             dest_wheel_path = plugin_dir / temp_wheel_path.name
+            self._remove_bundle_files(dest_wheel_path)
             shutil.copy2(temp_wheel_path, dest_wheel_path)
 
         # Try downloading the signature bundle alongside the wheel
@@ -317,6 +340,7 @@ class PluginDownloader:
             sha256=computed_hash,
         )
 
+        self._sync_trust_record(plugin_name, computed_hash, sig_info)
         self._write_manifest(
             plugin_dir=plugin_dir,
             plugin_name=plugin_name,
@@ -480,6 +504,7 @@ class PluginDownloader:
             plugin_dir.mkdir(parents=True, exist_ok=True)
 
             dest_wheel_path = plugin_dir / temp_wheel_path.name
+            self._remove_bundle_files(dest_wheel_path)
             shutil.copy2(temp_wheel_path, dest_wheel_path)
 
             # Copy bundle alongside the wheel if present in the artifact
@@ -503,6 +528,7 @@ class PluginDownloader:
             sha256=sha256,
         )
 
+        self._sync_trust_record(plugin_name, sha256, sig_info)
         self._write_manifest(
             plugin_dir=plugin_dir,
             plugin_name=plugin_name,
@@ -523,13 +549,11 @@ class PluginDownloader:
             logger.warning("Invalid plugin name: %s", plugin_name)
             return False
 
-        plugin_dir = self.plugins_dir / plugin_name
-        if not plugin_dir.exists():
-            # Try finding by entry point name
-            plugin_dir = self._find_plugin_dir_by_entry_point(plugin_name)
-            if plugin_dir is None:
-                return False
+        plugin_dir = self._resolve_plugin_dir(plugin_name)
+        if plugin_dir is None:
+            return False
 
+        self.trust_store.revoke_plugin(plugin_dir.name)
         shutil.rmtree(plugin_dir)
 
         logger.info("Uninstalled plugin: %s", plugin_name)
@@ -537,27 +561,36 @@ class PluginDownloader:
 
     def get_installed_version(self, plugin_name: str) -> Optional[str]:
         """Get the installed version of a plugin (by package name or entry point name)."""
-        if not self._is_valid_plugin_name(plugin_name):
-            logger.warning("Invalid plugin name: %s", plugin_name)
+        manifest = self.get_manifest(plugin_name)
+        if not manifest:
             return None
-
-        manifest_path = self.plugins_dir / plugin_name / "manifest.json"
-        if not manifest_path.exists():
-            # Try finding by entry point name
-            plugin_dir = self._find_plugin_dir_by_entry_point(plugin_name)
-            if plugin_dir is None:
-                return None
-            manifest_path = plugin_dir / "manifest.json"
-
-        try:
-            manifest = json.loads(manifest_path.read_text())
-            return manifest.get("version")
-        except (json.JSONDecodeError, KeyError):
-            return None
+        return manifest.get("version")
 
     def is_installed(self, plugin_name: str) -> bool:
         """Check if a plugin is installed (by package name or entry point name)."""
         return self.get_installed_version(plugin_name) is not None
+
+    def _resolve_plugin_dir(self, plugin_name: str) -> Optional[Path]:
+        """Resolve a plugin directory from a package or entry point name."""
+        plugin_dir = self.plugins_dir / plugin_name
+        if plugin_dir.exists():
+            return plugin_dir
+        return self._find_plugin_dir_by_entry_point(plugin_name)
+
+    def _get_manifest_path(self, plugin_name: str) -> Optional[Path]:
+        """Return the manifest path for a plugin installed by package or entry point."""
+        if not self._is_valid_plugin_name(plugin_name):
+            logger.warning("Invalid plugin name: %s", plugin_name)
+            return None
+
+        plugin_dir = self._resolve_plugin_dir(plugin_name)
+        if plugin_dir is None:
+            return None
+
+        manifest_path = plugin_dir / "manifest.json"
+        if not manifest_path.exists():
+            return None
+        return manifest_path
 
     def _find_plugin_dir_by_entry_point(self, entry_point_name: str) -> Optional[Path]:
         """Find a plugin directory by its entry point name."""
@@ -596,19 +629,15 @@ class PluginDownloader:
 
     def get_wheel_path(self, plugin_name: str) -> Optional[Path]:
         """Get the path to an installed plugin's wheel file."""
-        if not self._is_valid_plugin_name(plugin_name):
-            logger.warning("Invalid plugin name: %s", plugin_name)
-            return None
-
-        manifest_path = self.plugins_dir / plugin_name / "manifest.json"
-        if not manifest_path.exists():
+        manifest_path = self._get_manifest_path(plugin_name)
+        if manifest_path is None:
             return None
 
         try:
             manifest = json.loads(manifest_path.read_text())
             wheel_filename = manifest.get("wheel_filename")
             if wheel_filename:
-                wheel_path = self.plugins_dir / plugin_name / wheel_filename
+                wheel_path = manifest_path.parent / wheel_filename
                 if wheel_path.exists():
                     return wheel_path
         except (json.JSONDecodeError, KeyError):
@@ -618,18 +647,30 @@ class PluginDownloader:
 
     def get_manifest(self, plugin_name: str) -> Optional[Dict[str, Any]]:
         """Get the full manifest for an installed plugin."""
-        if not self._is_valid_plugin_name(plugin_name):
-            logger.warning("Invalid plugin name: %s", plugin_name)
-            return None
-
-        manifest_path = self.plugins_dir / plugin_name / "manifest.json"
-        if not manifest_path.exists():
+        manifest_path = self._get_manifest_path(plugin_name)
+        if manifest_path is None:
             return None
 
         try:
             return json.loads(manifest_path.read_text())
         except json.JSONDecodeError:
             return None
+
+    def get_installed_signature_label(self, plugin_name: str) -> Optional[str]:
+        """Return the display label for an installed plugin's signature state."""
+        manifest = self.get_manifest(plugin_name)
+        if not manifest:
+            return None
+
+        trusted_unsigned = False
+        wheel_path = self.get_wheel_path(plugin_name)
+        if wheel_path is not None:
+            trusted_unsigned = self.trust_store.is_trusted(
+                wheel_path.parent.name,
+                self._compute_sha256(wheel_path),
+            )
+
+        return get_signature_label(manifest, trusted_unsigned=trusted_unsigned)
 
     def get_plugin_source(self, plugin_name: str) -> Optional[PluginSource]:
         """Get the source information for an installed plugin."""
@@ -691,7 +732,36 @@ class PluginDownloader:
             manifest["signature"] = sig_data
 
         manifest_path = plugin_dir / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        tmp_path = manifest_path.with_suffix(".json.tmp")
+        try:
+            tmp_path.write_text(json.dumps(manifest, indent=2))
+            tmp_path.replace(manifest_path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    def _sync_trust_record(
+        self,
+        plugin_name: str,
+        sha256: str,
+        signature_info: SignatureInfo,
+    ) -> None:
+        """Persist or revoke trust for a plugin based on install-time verification.
+
+        When a plugin is installed with a VALID signature we remove any stale
+        trust exception (from a previous unsigned install). Otherwise we record
+        the new hash — ``trust_plugin`` overwrites the existing entry so we do
+        not need to revoke first.
+        """
+        if signature_info.status == SignatureStatus.VALID:
+            self.trust_store.revoke_plugin(plugin_name)
+            return
+
+        self.trust_store.trust_plugin(
+            plugin_name,
+            sha256,
+            signature_info.status.value,
+        )
 
     def _download_bundle(
         self,
@@ -707,12 +777,20 @@ class PluginDownloader:
 
         try:
             logger.info("Downloading signature bundle...")
-            response = requests.get(download_info.signature_url, stream=True)
+            response = requests.get(
+                download_info.signature_url, stream=True, timeout=30
+            )
             response.raise_for_status()
 
-            with open(bundle_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+            try:
+                with open(bundle_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            except BaseException:
+                # Remove any partial bundle left behind by a mid-stream error.
+                if bundle_path.exists():
+                    bundle_path.unlink()
+                raise
 
             return bundle_path
         except requests.RequestException as e:
@@ -730,12 +808,17 @@ class PluginDownloader:
             bundle_url = wheel_url + ext
             bundle_path = dest_wheel_path.parent / (dest_wheel_path.name + ext)
             try:
-                response = requests.get(bundle_url, stream=True)
+                response = requests.get(bundle_url, stream=True, timeout=30)
                 response.raise_for_status()
 
-                with open(bundle_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
+                try:
+                    with open(bundle_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                except BaseException:
+                    if bundle_path.exists():
+                        bundle_path.unlink()
+                    raise
 
                 logger.info("Downloaded signature bundle from %s", bundle_url)
                 return bundle_path
@@ -745,16 +828,19 @@ class PluginDownloader:
         logger.debug("No signature bundle found at URL conventions for %s", wheel_url)
         return None
 
+    def _remove_bundle_files(self, wheel_path: Path) -> None:
+        """Remove any bundle sidecars associated with a wheel path."""
+        for ext in (".sigstore", ".sigstore.json"):
+            bundle = wheel_path.parent / (wheel_path.name + ext)
+            if bundle.exists():
+                bundle.unlink()
+
     def _cleanup_failed_install(self, wheel_path: Path) -> None:
         """Remove wheel and bundle files after a failed install."""
         if wheel_path.exists():
             wheel_path.unlink()
 
-        # Also clean up any bundle files
-        for ext in (".sigstore", ".sigstore.json"):
-            bundle = wheel_path.parent / (wheel_path.name + ext)
-            if bundle.exists():
-                bundle.unlink()
+        self._remove_bundle_files(wheel_path)
 
     def _compute_sha256(self, file_path: Path) -> str:
         """Compute SHA256 hash of a file."""

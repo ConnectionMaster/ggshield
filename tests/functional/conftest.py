@@ -3,6 +3,7 @@ import http.server
 import json
 import shutil
 import socketserver
+import subprocess
 import time
 from multiprocessing import Event, Process, Value
 from pathlib import Path
@@ -20,7 +21,27 @@ FUNCTESTS_DATA_PATH = Path(__file__).parent / "data"
 # Path to the root of ggshield repository
 REPO_PATH = Path(__file__).parent.parent.parent
 
-HAS_DOCKER = shutil.which("docker") is not None
+
+def _has_working_docker() -> bool:
+    docker = shutil.which("docker")
+    if docker is None:
+        return False
+
+    try:
+        subprocess.run(
+            [docker, "info"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+    return True
+
+
+HAS_DOCKER = _has_working_docker()
 
 HOOK_CONTENT = """#!/usr/bin/env sh
 ggshield {} scan pre-receive
@@ -31,8 +52,12 @@ ggshield {} scan pre-receive --all
 """
 
 
-# Use this as a decorator for tests which call the `docker` binary
-requires_docker = pytest.mark.skipif(not HAS_DOCKER, reason="This test requires Docker")
+# Use this as a decorator for tests which call the `docker` binary and need a
+# working daemon.
+requires_docker = pytest.mark.skipif(
+    not HAS_DOCKER,
+    reason="This test requires a working Docker daemon",
+)
 
 # Fake responses for the mock GG API server, so that tests using mock fixtures
 # do not depend on the real GitGuardian API being reachable.

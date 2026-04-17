@@ -105,11 +105,14 @@ def update_cmd(
     ctx_obj = ContextObj.get(ctx)
     config = ctx_obj.config
 
-    # Get installed plugins and signature verification mode
+    # Signature verification is strict by default. The only override is the
+    # explicit per-command --allow-unsigned flag.
     enterprise_config = EnterpriseConfig.load()
-    signature_mode = enterprise_config.get_signature_mode()
-    if allow_unsigned:
-        signature_mode = SignatureVerificationMode.WARN
+    signature_mode = (
+        SignatureVerificationMode.WARN
+        if allow_unsigned
+        else SignatureVerificationMode.STRICT
+    )
     loader = PluginLoader(enterprise_config)
     downloader = PluginDownloader()
 

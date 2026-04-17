@@ -1090,11 +1090,11 @@ class TestPluginUpdate:
         assert "localplugin" in result.output
         assert "local_file" in result.output
 
-    def test_update_forwards_enterprise_signature_mode(self, cli_fs_runner):
+    def test_update_default_signature_mode_is_strict(self, cli_fs_runner):
         """
-        GIVEN enterprise config has signature mode set to "warn"
+        GIVEN no --allow-unsigned flag
         WHEN running 'ggshield plugin update <plugin>'
-        THEN download_and_install is called with signature_mode=WARN
+        THEN download_and_install is called with signature_mode=STRICT
         """
         mock_catalog = PluginCatalog(
             plan="Enterprise",
@@ -1153,9 +1153,7 @@ class TestPluginUpdate:
             mock_plugin_api_client.get_download_info.return_value = mock_download_info
             mock_plugin_api_client_class.return_value = mock_plugin_api_client
 
-            mock_config = mock.MagicMock()
-            mock_config.get_signature_mode.return_value = SignatureVerificationMode.WARN
-            mock_config_class.load.return_value = mock_config
+            mock_config_class.load.return_value = mock.MagicMock()
 
             mock_loader = mock.MagicMock()
             mock_loader.discover_plugins.return_value = mock_discovered_plugins
@@ -1174,11 +1172,11 @@ class TestPluginUpdate:
         assert result.exit_code == ExitCode.SUCCESS
         mock_downloader.download_and_install.assert_called_once()
         call_kwargs = mock_downloader.download_and_install.call_args
-        assert call_kwargs.kwargs["signature_mode"] == SignatureVerificationMode.WARN
+        assert call_kwargs.kwargs["signature_mode"] == SignatureVerificationMode.STRICT
 
     def test_update_allow_unsigned_overrides_to_warn(self, cli_fs_runner):
         """
-        GIVEN enterprise config has strict signature mode
+        GIVEN --allow-unsigned
         WHEN running 'ggshield plugin update --allow-unsigned <plugin>'
         THEN download_and_install is called with signature_mode=WARN
         """
@@ -1239,11 +1237,7 @@ class TestPluginUpdate:
             mock_plugin_api_client.get_download_info.return_value = mock_download_info
             mock_plugin_api_client_class.return_value = mock_plugin_api_client
 
-            mock_config = mock.MagicMock()
-            mock_config.get_signature_mode.return_value = (
-                SignatureVerificationMode.STRICT
-            )
-            mock_config_class.load.return_value = mock_config
+            mock_config_class.load.return_value = mock.MagicMock()
 
             mock_loader = mock.MagicMock()
             mock_loader.discover_plugins.return_value = mock_discovered_plugins
@@ -1264,11 +1258,13 @@ class TestPluginUpdate:
         call_kwargs = mock_downloader.download_and_install.call_args
         assert call_kwargs.kwargs["signature_mode"] == SignatureVerificationMode.WARN
 
-    def test_update_github_release_forwards_signature_mode(self, cli_fs_runner):
+    def test_update_github_release_default_signature_mode_is_strict(
+        self, cli_fs_runner
+    ):
         """
         GIVEN a plugin from GitHub release with an update available
         WHEN running 'ggshield plugin update <plugin>'
-        THEN download_from_github_release is called with the enterprise signature_mode
+        THEN download_from_github_release is called with signature_mode=STRICT
         """
         from ggshield.core.plugin.client import PluginSource, PluginSourceType
 
@@ -1315,9 +1311,7 @@ class TestPluginUpdate:
                 return_value="https://github.com/owner/repo/releases/download/v2.0.0/ghplugin.whl",
             ),
         ):
-            mock_config = mock.MagicMock()
-            mock_config.get_signature_mode.return_value = SignatureVerificationMode.WARN
-            mock_config_class.load.return_value = mock_config
+            mock_config_class.load.return_value = mock.MagicMock()
 
             mock_loader = mock.MagicMock()
             mock_loader.discover_plugins.return_value = mock_discovered_plugins
@@ -1336,7 +1330,7 @@ class TestPluginUpdate:
         assert result.exit_code == ExitCode.SUCCESS
         mock_downloader.download_from_github_release.assert_called_once()
         call_kwargs = mock_downloader.download_from_github_release.call_args
-        assert call_kwargs.kwargs["signature_mode"] == SignatureVerificationMode.WARN
+        assert call_kwargs.kwargs["signature_mode"] == SignatureVerificationMode.STRICT
 
 
 class TestUpdateHelperFunctions:

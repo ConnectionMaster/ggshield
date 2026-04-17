@@ -19,6 +19,7 @@ from ggshield.core.plugin.signature import (
     SignatureVerificationError,
     SignatureVerificationMode,
 )
+from ggshield.core.plugin.trust import PluginTrustStore, compute_file_sha256
 
 
 class MockPlugin(GGShieldPlugin):
@@ -82,6 +83,13 @@ class TestPluginLoader:
         assert discovered[0].name == "testplugin"
         assert discovered[0].version == "1.0.0"
         assert discovered[0].is_installed is True
+
+    def test_init_defaults_signature_mode_to_strict(self) -> None:
+        """Plugin loading is strict by default."""
+        config = EnterpriseConfig()
+        loader = PluginLoader(config)
+
+        assert loader.signature_mode == SignatureVerificationMode.STRICT
 
     def test_is_enabled_default(self) -> None:
         """Test that plugins are disabled by default."""
@@ -593,6 +601,49 @@ myplugin = other:Plugin
         assert extract_dir.exists()
         assert (extract_dir / "test_plugin" / "__init__.py").exists()
 
+    def test_load_from_wheel_reextracts_in_strict_mode(self, tmp_path: Path) -> None:
+        """STRICT mode must re-extract even if an extracted tree already exists."""
+        import zipfile
+
+        from ggshield.core.plugin.signature import SignatureInfo
+
+        config = EnterpriseConfig()
+        loader = PluginLoader(config, signature_mode=SignatureVerificationMode.STRICT)
+
+        wheel_path = tmp_path / "test_plugin-1.0.0.whl"
+        with zipfile.ZipFile(wheel_path, "w") as zf:
+            zf.writestr("test_plugin/__init__.py", "class TestPlugin: pass")
+            zf.writestr(
+                "test_plugin-1.0.0.dist-info/entry_points.txt",
+                "[ggshield.plugins]\ntest = test_plugin:TestPlugin\n",
+            )
+
+        extract_dir = tmp_path / ".test_plugin-1.0.0_extracted"
+        extract_dir.mkdir()
+        stale_file = extract_dir / "stale.txt"
+        stale_file.write_text("stale")
+        extract_dir.touch()
+
+        with patch(
+            "ggshield.core.plugin.loader.verify_wheel_signature",
+            return_value=SignatureInfo(
+                status=SignatureStatus.VALID,
+                identity="GitGuardian/satori",
+            ),
+        ):
+            with patch(
+                "ggshield.core.plugin.loader.importlib.import_module"
+            ) as mock_import:
+                mock_module = MagicMock()
+                mock_module.TestPlugin = MockPlugin
+                mock_import.return_value = mock_module
+
+                result = loader._load_from_wheel(wheel_path)
+
+        assert result is not None
+        assert not stale_file.exists()
+        assert (extract_dir / "test_plugin" / "__init__.py").exists()
+
     def test_load_from_wheel_rejects_on_strict_signature_error(
         self, tmp_path: Path
     ) -> None:
@@ -641,6 +692,54 @@ myplugin = other:Plugin
             return_value=SignatureInfo(
                 status=SignatureStatus.MISSING, message="No bundle found"
             ),
+        ) as mock_verify:
+            with patch(
+                "ggshield.core.plugin.loader.importlib.import_module"
+            ) as mock_import:
+                mock_module = MagicMock()
+                mock_module.TestPlugin = MockPlugin
+                mock_import.return_value = mock_module
+
+                result = loader._load_from_wheel(wheel_path)
+
+        assert result is not None
+        assert mock_verify.call_args[0][1] == SignatureVerificationMode.WARN
+
+    def test_load_from_wheel_allows_trusted_unsigned_plugin_in_strict_mode(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        GIVEN a plugin wheel explicitly trusted at install time with --allow-unsigned
+        WHEN loading it while the configured mode is STRICT
+        THEN the loader accepts the exact trusted wheel.
+        """
+        import zipfile
+
+        config = EnterpriseConfig()
+        loader = PluginLoader(config, signature_mode=SignatureVerificationMode.STRICT)
+        loader.trust_store = PluginTrustStore(path=tmp_path / "plugin_trust.json")
+
+        plugin_dir = tmp_path / "testplugin"
+        plugin_dir.mkdir()
+        wheel_path = plugin_dir / "test_plugin-1.0.0.whl"
+        with zipfile.ZipFile(wheel_path, "w") as zf:
+            zf.writestr("test_plugin/__init__.py", "class TestPlugin: pass")
+            zf.writestr(
+                "test_plugin-1.0.0.dist-info/entry_points.txt",
+                "[ggshield.plugins]\ntest = test_plugin:TestPlugin\n",
+            )
+
+        loader.trust_store.trust_plugin(
+            plugin_dir.name,
+            compute_file_sha256(wheel_path),
+            "missing",
+        )
+
+        with patch(
+            "ggshield.core.plugin.loader.verify_wheel_signature",
+            side_effect=SignatureVerificationError(
+                SignatureStatus.MISSING, "No bundle found"
+            ),
         ):
             with patch(
                 "ggshield.core.plugin.loader.importlib.import_module"
@@ -653,12 +752,90 @@ myplugin = other:Plugin
 
         assert result is not None
 
+    def test_load_from_wheel_strict_mode_rejects_manifest_only_override(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        GIVEN a plugin directory containing a manifest that records an unsigned install
+        WHEN loading it while the configured mode is STRICT without a trust record
+        THEN the loader still rejects the wheel.
+        """
+        import zipfile
+
+        config = EnterpriseConfig()
+        loader = PluginLoader(config, signature_mode=SignatureVerificationMode.STRICT)
+        loader.trust_store = PluginTrustStore(path=tmp_path / "plugin_trust.json")
+
+        wheel_path = tmp_path / "test_plugin-1.0.0.whl"
+        with zipfile.ZipFile(wheel_path, "w") as zf:
+            zf.writestr(
+                "test_plugin-1.0.0.dist-info/entry_points.txt",
+                "[ggshield.plugins]\ntest = test_plugin:TestPlugin\n",
+            )
+
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(
+            json.dumps({"signature": {"status": "missing", "message": "no bundle"}})
+        )
+
+        with patch(
+            "ggshield.core.plugin.loader.verify_wheel_signature",
+            side_effect=SignatureVerificationError(
+                SignatureStatus.MISSING, "No bundle found"
+            ),
+        ) as mock_verify:
+            result = loader._load_from_wheel(wheel_path)
+
+        assert result is None
+        assert mock_verify.call_args[0][1] == SignatureVerificationMode.STRICT
+
+    def test_load_from_wheel_rejects_trusted_unsigned_when_hash_changes(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        GIVEN a plugin that was trusted when installed unsigned
+        WHEN the wheel contents change later
+        THEN the stored trust record no longer applies.
+        """
+        import zipfile
+
+        config = EnterpriseConfig()
+        loader = PluginLoader(config, signature_mode=SignatureVerificationMode.STRICT)
+        loader.trust_store = PluginTrustStore(path=tmp_path / "plugin_trust.json")
+
+        plugin_dir = tmp_path / "testplugin"
+        plugin_dir.mkdir()
+        wheel_path = plugin_dir / "test_plugin-1.0.0.whl"
+        with zipfile.ZipFile(wheel_path, "w") as zf:
+            zf.writestr(
+                "test_plugin-1.0.0.dist-info/entry_points.txt",
+                "[ggshield.plugins]\ntest = test_plugin:TestPlugin\n",
+            )
+
+        loader.trust_store.trust_plugin(
+            plugin_dir.name,
+            compute_file_sha256(wheel_path),
+            "missing",
+        )
+
+        wheel_path.write_bytes(b"tampered")
+
+        with patch(
+            "ggshield.core.plugin.loader.verify_wheel_signature",
+            side_effect=SignatureVerificationError(
+                SignatureStatus.MISSING, "No bundle found"
+            ),
+        ):
+            result = loader._load_from_wheel(wheel_path)
+
+        assert result is None
+
     def test_load_from_wheel_handles_exception(self, tmp_path: Path) -> None:
         """Test that _load_from_wheel returns None on exception."""
         import zipfile
 
         config = EnterpriseConfig()
-        loader = PluginLoader(config)
+        loader = PluginLoader(config, signature_mode=SignatureVerificationMode.DISABLED)
 
         # Create wheel with entry point
         wheel_path = tmp_path / "test-1.0.0.whl"

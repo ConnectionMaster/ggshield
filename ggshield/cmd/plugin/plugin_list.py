@@ -9,6 +9,7 @@ import click
 from ggshield.cmd.utils.common_options import add_common_options
 from ggshield.core import ui
 from ggshield.core.config.enterprise_config import EnterpriseConfig
+from ggshield.core.plugin.downloader import PluginDownloader
 from ggshield.core.plugin.loader import PluginLoader
 
 
@@ -27,6 +28,7 @@ def list_cmd(ctx: click.Context, **kwargs: Any) -> None:
     """
     enterprise_config = EnterpriseConfig.load()
     loader = PluginLoader(enterprise_config)
+    downloader = PluginDownloader()
 
     discovered = loader.discover_plugins()
 
@@ -60,6 +62,10 @@ def list_cmd(ctx: click.Context, **kwargs: Any) -> None:
             status_parts.append("local")
         elif plugin.entry_point:
             status_parts.append("pip")
+
+        sig_label = downloader.get_installed_signature_label(plugin.name)
+        if sig_label:
+            status_parts.append(f"signature: {sig_label}")
 
         status = ", ".join(status_parts)
         ui.display_info(f"  {plugin.name}: {status}")

@@ -125,11 +125,13 @@ def install_cmd(
 
         ggshield plugin install https://github.com/owner/repo/actions/runs/123/artifacts/456
     """
-    # Determine signature verification mode
-    enterprise_config = EnterpriseConfig.load()
-    signature_mode = enterprise_config.get_signature_mode()
-    if allow_unsigned:
-        signature_mode = SignatureVerificationMode.WARN
+    # Signature verification is strict by default. The only override is the
+    # explicit per-command --allow-unsigned flag.
+    signature_mode = (
+        SignatureVerificationMode.WARN
+        if allow_unsigned
+        else SignatureVerificationMode.STRICT
+    )
 
     source_type = detect_source_type(plugin_source)
 
@@ -212,7 +214,9 @@ def _install_from_gitguardian(
     except SignatureVerificationError as e:
         ui.display_error(f"Signature verification failed for {plugin_name}: {e}")
         ui.display_info(
-            "Use --allow-unsigned to install without signature verification"
+            "This plugin is not signed by GitGuardian. "
+            "If you trust its origin and still want to install it, "
+            "pass --allow-unsigned."
         )
         ctx.exit(ExitCode.UNEXPECTED_ERROR)
     except PluginNotAvailableError as e:
@@ -257,7 +261,9 @@ def _install_from_local_wheel(
     except SignatureVerificationError as e:
         ui.display_error(f"Signature verification failed: {e}")
         ui.display_info(
-            "Use --allow-unsigned to install without signature verification"
+            "This plugin is not signed by GitGuardian. "
+            "If you trust its origin and still want to install it, "
+            "pass --allow-unsigned."
         )
         ctx.exit(ExitCode.UNEXPECTED_ERROR)
     except DownloadError as e:
@@ -294,7 +300,9 @@ def _install_from_url(
     except SignatureVerificationError as e:
         ui.display_error(f"Signature verification failed: {e}")
         ui.display_info(
-            "Use --allow-unsigned to install without signature verification"
+            "This plugin is not signed by GitGuardian. "
+            "If you trust its origin and still want to install it, "
+            "pass --allow-unsigned."
         )
         ctx.exit(ExitCode.UNEXPECTED_ERROR)
     except InsecureSourceError as e:
@@ -337,7 +345,9 @@ def _install_from_github_release(
     except SignatureVerificationError as e:
         ui.display_error(f"Signature verification failed: {e}")
         ui.display_info(
-            "Use --allow-unsigned to install without signature verification"
+            "This plugin is not signed by GitGuardian. "
+            "If you trust its origin and still want to install it, "
+            "pass --allow-unsigned."
         )
         ctx.exit(ExitCode.UNEXPECTED_ERROR)
     except InsecureSourceError as e:
@@ -381,7 +391,9 @@ def _install_from_github_artifact(
     except SignatureVerificationError as e:
         ui.display_error(f"Signature verification failed: {e}")
         ui.display_info(
-            "Use --allow-unsigned to install without signature verification"
+            "This plugin is not signed by GitGuardian. "
+            "If you trust its origin and still want to install it, "
+            "pass --allow-unsigned."
         )
         ctx.exit(ExitCode.UNEXPECTED_ERROR)
     except GitHubArtifactError as e:

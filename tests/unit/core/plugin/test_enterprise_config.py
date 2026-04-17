@@ -3,8 +3,9 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from ggshield.core.config.enterprise_config import EnterpriseConfig, PluginConfig
-from ggshield.core.plugin.signature import SignatureVerificationMode
 
 
 class TestPluginConfig:
@@ -57,14 +58,14 @@ class TestEnterpriseConfig:
         assert config.plugins["test-plugin"].enabled is True
         assert config.plugins["test-plugin"].version == "1.0.0"
 
-    def test_disable_plugin_missing_creates_config(self) -> None:
-        """Test disabling a missing plugin creates a disabled config entry."""
+    def test_disable_plugin_missing_raises(self) -> None:
+        """Disabling an unknown plugin raises ValueError."""
         config = EnterpriseConfig()
 
-        config.disable_plugin("test-plugin")
+        with pytest.raises(ValueError, match="not configured"):
+            config.disable_plugin("test-plugin")
 
-        assert "test-plugin" in config.plugins
-        assert config.plugins["test-plugin"].enabled is False
+        assert "test-plugin" not in config.plugins
 
     def test_disable_existing_plugin(self) -> None:
         """Test disabling an already configured plugin."""
@@ -153,45 +154,51 @@ class TestEnterpriseConfig:
             assert loaded.plugins["test-plugin"].enabled is True
             assert loaded.plugins["test-plugin"].version == "1.0.0"
 
-    def test_get_signature_mode_default(self) -> None:
-        """Test default signature mode is warn."""
-        config = EnterpriseConfig()
-
-        assert config.get_signature_mode() == SignatureVerificationMode.WARN
-
-    def test_get_signature_mode_warn(self) -> None:
-        """Test warn signature mode."""
-        config = EnterpriseConfig(plugin_signature_mode="warn")
-
-        assert config.get_signature_mode() == SignatureVerificationMode.WARN
-
-    def test_get_signature_mode_disabled(self) -> None:
-        """Test disabled signature mode."""
-        config = EnterpriseConfig(plugin_signature_mode="disabled")
-
-        assert config.get_signature_mode() == SignatureVerificationMode.DISABLED
-
-    def test_get_signature_mode_invalid_falls_back_to_strict(self) -> None:
-        """Test that invalid mode falls back to strict."""
-        config = EnterpriseConfig(plugin_signature_mode="invalid_value")
-
-        assert config.get_signature_mode() == SignatureVerificationMode.STRICT
-
-    def test_load_and_save_signature_mode(self, tmp_path: Path) -> None:
-        """Test that plugin_signature_mode is persisted."""
+    def test_load_ignores_legacy_signature_mode(self, tmp_path: Path) -> None:
+        """Legacy plugin_signature_mode entries are ignored when loading config."""
         config_path = tmp_path / "enterprise_config.yaml"
+        config_path.write_text(
+            """
+plugin_signature_mode: warn
+plugins:
+  test-plugin:
+    enabled: true
+    version: 1.0.0
+"""
+        )
 
         with patch(
             "ggshield.core.config.enterprise_config.get_enterprise_config_filepath"
         ) as mock_path:
             mock_path.return_value = config_path
 
-            config = EnterpriseConfig(plugin_signature_mode="warn")
+            config = EnterpriseConfig.load()
+
+            assert config.plugins["test-plugin"].enabled is True
+            assert config.plugins["test-plugin"].version == "1.0.0"
+
+    def test_save_drops_legacy_signature_mode(self, tmp_path: Path) -> None:
+        """Saving config rewrites legacy plugin_signature_mode entries away."""
+        config_path = tmp_path / "enterprise_config.yaml"
+        config_path.write_text(
+            """
+plugin_signature_mode: warn
+plugins:
+  test-plugin:
+    enabled: true
+    version: 1.0.0
+"""
+        )
+
+        with patch(
+            "ggshield.core.config.enterprise_config.get_enterprise_config_filepath"
+        ) as mock_path:
+            mock_path.return_value = config_path
+
+            config = EnterpriseConfig.load()
             config.save()
 
-            loaded = EnterpriseConfig.load()
-            assert loaded.plugin_signature_mode == "warn"
-            assert loaded.get_signature_mode() == SignatureVerificationMode.WARN
+            assert "plugin_signature_mode" not in config_path.read_text()
 
     def test_load_simple_format(self, tmp_path: Path) -> None:
         """Test loading config with simple boolean format."""

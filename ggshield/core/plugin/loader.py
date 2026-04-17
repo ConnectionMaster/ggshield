@@ -24,6 +24,7 @@ from ggshield.core.plugin.signature import (
     SignatureVerificationMode,
     verify_wheel_signature,
 )
+from ggshield.core.plugin.trust import PluginTrustStore, compute_file_sha256
 
 
 class WheelInfo(TypedDict):
@@ -94,10 +95,11 @@ class PluginLoader:
     ) -> None:
         self.enterprise_config = enterprise_config
         self.plugins_dir = get_plugins_dir()
+        self.trust_store = PluginTrustStore(plugins_dir=self.plugins_dir)
         self.signature_mode = (
             signature_mode
             if signature_mode is not None
-            else enterprise_config.get_signature_mode()
+            else SignatureVerificationMode.STRICT
         )
 
     def discover_plugins(self) -> List[DiscoveredPlugin]:
@@ -201,7 +203,6 @@ class PluginLoader:
         Wheels are extracted to a directory before loading because Python
         cannot import native extensions (.so/.pyd) directly from zip files.
         """
-        # Verify signature before loading
         try:
             sig_info = verify_wheel_signature(wheel_path, self.signature_mode)
             if sig_info.status == SignatureStatus.VALID:
@@ -221,16 +222,32 @@ class PluginLoader:
                     sig_info.message or "",
                 )
         except SignatureVerificationError as e:
-            logger.error("Signature verification failed for %s: %s", wheel_path.name, e)
-            return None
+            if (
+                self.signature_mode == SignatureVerificationMode.STRICT
+                and self._is_trusted_unsigned_plugin(wheel_path)
+            ):
+                logger.warning(
+                    "Allowing trusted unsigned plugin %s after signature verification failed: %s",
+                    wheel_path.name,
+                    e,
+                )
+            else:
+                logger.error(
+                    "Signature verification failed for %s: %s",
+                    wheel_path.name,
+                    e,
+                )
+                return None
 
         # Extract wheel to a directory alongside the wheel file
         extract_dir = wheel_path.parent / f".{wheel_path.stem}_extracted"
 
         try:
-            # Extract if not already extracted or wheel is newer
-            if not extract_dir.exists() or (
-                wheel_path.stat().st_mtime > extract_dir.stat().st_mtime
+            # In STRICT mode, always re-extract after verification so imports
+            # come from the wheel bytes we just checked.
+            if self.signature_mode == SignatureVerificationMode.STRICT or (
+                not extract_dir.exists()
+                or wheel_path.stat().st_mtime > extract_dir.stat().st_mtime
             ):
                 import shutil
 
@@ -258,6 +275,20 @@ class PluginLoader:
         except Exception as e:
             logger.warning("Failed to load wheel %s: %s", wheel_path, e)
             return None
+
+    def _is_trusted_unsigned_plugin(self, wheel_path: Path) -> bool:
+        """Return True when the current wheel hash matches a persisted trust record."""
+        plugin_name = wheel_path.parent.name
+        wheel_sha256 = compute_file_sha256(wheel_path)
+        if self.trust_store.is_trusted(plugin_name, wheel_sha256):
+            return True
+
+        if self.trust_store.get_record(plugin_name) is not None:
+            logger.warning(
+                "Stored trust for %s does not match the current wheel hash, refusing to load it",
+                plugin_name,
+            )
+        return False
 
     def _read_wheel_entry_point(self, wheel_path: Path) -> Optional[str]:
         """Read the ggshield.plugins entry point value from a wheel's metadata."""
