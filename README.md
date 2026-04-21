@@ -40,6 +40,7 @@ Only metadata such as call time, request size and scan mode is stored from scans
 - [Getting started](#getting-started)
   - [Secrets](#secrets)
 - [Integrations](#integrations)
+  - [AI coding assistants](#ai-coding-assistants)
 - [Learn more](#learn-more)
 - [Output](#output)
 - [Related open source projects](#related-open-source-projects)
@@ -169,6 +170,14 @@ You can now use `ggshield` to search for secrets:
 You can integrate `ggshield` in your [CI/CD workflow](https://docs.gitguardian.com/ggshield-docs/integrations/overview#cicd-integrations-secrets-detection-in-your-cicd-workflow).
 
 To catch errors earlier, use `ggshield` as a [pre-commit, pre-push or pre-receive Git hook](https://docs.gitguardian.com/ggshield-docs/integrations/overview#git-hooks-prevent-secrets-from-reaching-your-vcs).
+
+## AI coding assistants
+
+`ggshield` can [scan interactions](https://docs.gitguardian.com/ggshield-docs/integrations/ai-coding-tools/secret-scanning-for-ai-coding-tools) between you and your AI coding assistant in real time, blocking actions that contain secrets before they are executed.
+
+You can install the hooks with the `ggshield install` command.
+
+Supported tools: **Cursor**, **Claude Code**, and **Copilot Chat**.
 
 # Learn more
 
