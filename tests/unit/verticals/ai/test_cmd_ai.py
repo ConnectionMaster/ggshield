@@ -105,16 +105,19 @@ class TestDiscoverCmd:
         "ggshield.cmd.ai.discover.submit_ai_discovery",
         return_value=_discovery(),
     )
+    @patch("ggshield.cmd.ai.discover.save_discovery_cache")
     def test_default_output(
         self,
         mock_save: MagicMock,
         mock_submit: MagicMock,
         mock_client: MagicMock,
+        mock_discover: MagicMock,
     ):
         runner = CliRunner()
         result = runner.invoke(cli, ["ai", "discover"])
 
         assert result.exit_code == 0
+        mock_discover.assert_called_once()
 
     @patch(
         "ggshield.cmd.ai.discover.discover_ai_configuration",
@@ -125,11 +128,13 @@ class TestDiscoverCmd:
         "ggshield.cmd.ai.discover.submit_ai_discovery",
         return_value=_discovery(),
     )
+    @patch("ggshield.cmd.ai.discover.save_discovery_cache")
     def test_json_flag(
         self,
         mock_save: MagicMock,
         mock_submit: MagicMock,
         mock_client: MagicMock,
+        mock_discover: MagicMock,
     ):
         runner = CliRunner()
         result = runner.invoke(cli, ["ai", "discover", "--json"])

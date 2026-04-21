@@ -13,19 +13,25 @@ from pygitguardian.models import AIDiscovery, Detail, MCPConfiguration, MCPServe
 from ggshield.core.errors import UnexpectedError
 
 from .agents import AGENTS
+from .cache import has_changed_from, load_discovery_cache, save_discovery_cache
 from .user import get_user_info
 
 
 def refresh_and_maybe_submit_discovery(client: GGClient) -> AIDiscovery:
-    """Run discovery and submit it.
+    """Always run discovery, compare with cache, submit only if changed."""
+    cached = load_discovery_cache()
+    # If we already have a machine id, reuse it.
+    machine_id = cached.user.machine_id if cached is not None else None
+    discovery = discover_ai_configuration(machine_id=machine_id)
 
-    The name of the function implies that we will cache the result later.
-    """
-    discovery = discover_ai_configuration()
+    # Nothing changed,
+    if cached is not None and not has_changed_from(discovery, cached):
+        return cached
 
     try:
         # Get the updated version of the discovery, filled with data from the API.
         discovery = submit_ai_discovery(client, discovery)
+        save_discovery_cache(discovery)
     except Exception:
         pass  # We don't want to display an error here, as we are in a hook.
 

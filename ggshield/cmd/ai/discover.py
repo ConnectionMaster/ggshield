@@ -16,6 +16,7 @@ from ggshield.core.client import create_client_from_config
 from ggshield.core.errors import APIKeyCheckError, UnknownInstanceError
 from ggshield.verticals.ai.discovery import (
     discover_ai_configuration,
+    save_discovery_cache,
     submit_ai_discovery,
 )
 
@@ -63,6 +64,7 @@ def discover_cmd(
         return
 
     try:
-        submit_ai_discovery(client, config)
+        config = submit_ai_discovery(client, config)
+        save_discovery_cache(config)
     except Exception as exc:
         ui.display_warning(f"Could not upload AI discovery to GitGuardian: {exc}")

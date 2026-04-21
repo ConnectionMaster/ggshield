@@ -9,6 +9,7 @@ from ggshield.core.errors import UnexpectedError
 from ggshield.verticals.ai.discovery import (
     _merge_mcp_configurations,
     discover_ai_configuration,
+    refresh_and_maybe_submit_discovery,
     submit_ai_discovery,
 )
 from ggshield.verticals.ai.models import MCPConfiguration, Scope, Transport
@@ -137,3 +138,116 @@ class TestSubmitAIDiscovery:
 
         with pytest.raises(UnexpectedError):
             submit_ai_discovery(client, discovery)
+
+
+# ---------------------------------------------------------------------------
+# refresh_and_maybe_submit_discovery
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshAndMaybeSubmitDiscovery:
+    def _patch_all(self):
+        return (
+            patch(
+                "ggshield.verticals.ai.discovery.load_discovery_cache",
+            ),
+            patch(
+                "ggshield.verticals.ai.discovery.discover_ai_configuration",
+            ),
+            patch(
+                "ggshield.verticals.ai.discovery.submit_ai_discovery",
+            ),
+            patch(
+                "ggshield.verticals.ai.discovery.save_discovery_cache",
+            ),
+        )
+
+    def test_no_cache_submits_and_saves(self):
+        p_load, p_discover, p_submit, p_save = self._patch_all()
+        with (
+            p_load as m_load,
+            p_discover as m_discover,
+            p_submit as m_submit,
+            p_save as m_save,
+        ):
+            m_load.return_value = None
+            new_disc = _discovery()
+            m_discover.return_value = new_disc
+            submitted = _discovery(discovery_duration=0.5)
+            m_submit.return_value = submitted
+
+            result = refresh_and_maybe_submit_discovery(MagicMock())
+
+            m_submit.assert_called_once()
+            m_save.assert_called_once_with(submitted)
+            assert result == submitted
+
+    def test_unchanged_returns_cache_without_submission(self):
+        cached = _discovery()
+        p_load, p_discover, p_submit, p_save = self._patch_all()
+        with (
+            p_load as m_load,
+            p_discover as m_discover,
+            p_submit as m_submit,
+            p_save as m_save,
+        ):
+            m_load.return_value = cached
+            m_discover.return_value = cached  # identical discovery
+
+            result = refresh_and_maybe_submit_discovery(MagicMock())
+
+            m_submit.assert_not_called()
+            m_save.assert_not_called()
+            assert result == cached
+
+    def test_changed_submits_and_saves(self):
+        cached = _discovery(user=_user(hostname="old"))
+        new_disc = _discovery(user=_user(hostname="new"))
+        p_load, p_discover, p_submit, p_save = self._patch_all()
+        with (
+            p_load as m_load,
+            p_discover as m_discover,
+            p_submit as m_submit,
+            p_save as m_save,
+        ):
+            m_load.return_value = cached
+            m_discover.return_value = new_disc
+            m_submit.return_value = new_disc
+
+            refresh_and_maybe_submit_discovery(MagicMock())
+
+            m_submit.assert_called_once()
+            m_save.assert_called_once()
+
+    def test_api_error_swallowed(self):
+        p_load, p_discover, p_submit, p_save = self._patch_all()
+        with (
+            p_load as m_load,
+            p_discover as m_discover,
+            p_submit as m_submit,
+            p_save as m_save,
+        ):
+            m_load.return_value = None
+            new_disc = _discovery()
+            m_discover.return_value = new_disc
+            m_submit.side_effect = RuntimeError("network")
+
+            result = refresh_and_maybe_submit_discovery(MagicMock())
+
+            assert result == new_disc
+            m_save.assert_not_called()
+
+    def test_reuses_machine_id_from_cache(self):
+        cached = _discovery(user=_user(machine_id="cached-id"))
+        p_load, p_discover = self._patch_all()[:2]
+        with (
+            p_load as m_load,
+            p_discover as m_discover,
+        ):
+            m_load.return_value = cached
+            m_discover.return_value = cached
+
+            refresh_and_maybe_submit_discovery(MagicMock())
+
+            _, kwargs = m_discover.call_args
+            assert kwargs.get("machine_id") == "cached-id"
