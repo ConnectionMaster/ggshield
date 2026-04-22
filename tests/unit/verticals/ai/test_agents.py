@@ -1,13 +1,127 @@
 import json
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 from ggshield.verticals.ai.agents.claude_code import Claude
 from ggshield.verticals.ai.agents.cursor import Cursor
+from ggshield.verticals.ai.models import MCPConfiguration, MCPServer, Scope, Transport
+
+
+def _cfg(
+    name: str = "srv",
+    agent: str = "cursor",
+    scope: Scope = Scope.USER,
+    project: Optional[Path] = None,
+) -> MCPConfiguration:
+    return MCPConfiguration(
+        name=name,
+        agent=agent,
+        scope=scope,
+        transport=Transport.STDIO,
+        project=str(project) if project else None,
+    )
+
 
 # ===========================================================================
 # Cursor
 # ===========================================================================
+
+
+class TestCursorDiscoverCapabilities:
+    def _setup_mcps_folder(
+        self, tmp_path: Path, project_path: Path, server_name: str
+    ) -> Path:
+        """Build a Cursor-style mcps/<server>/ folder layout and return the agent."""
+        mangled = project_path.as_posix().replace("/", "-").lstrip("-")
+        mcps_root = tmp_path / ".cursor" / "projects" / mangled / "mcps"
+        server_dir = mcps_root / "user-my-server"
+        server_dir.mkdir(parents=True, exist_ok=True)
+        # SERVER_METADATA.json
+        (server_dir / "SERVER_METADATA.json").write_text(
+            json.dumps({"serverName": server_name})
+        )
+        return server_dir
+
+    def test_populates_tools_resources_prompts(self, tmp_path: Path):
+        project = Path("/home/user/project")
+        server_dir = self._setup_mcps_folder(tmp_path, project, "my-mcp")
+
+        (server_dir / "tools").mkdir()
+        (server_dir / "tools" / "t1.json").write_text(
+            json.dumps({"name": "do_thing", "description": "Does a thing"})
+        )
+        (server_dir / "resources").mkdir()
+        (server_dir / "resources" / "r1.json").write_text(
+            json.dumps({"uri": "file:///data", "name": "data"})
+        )
+        (server_dir / "prompts").mkdir()
+        (server_dir / "prompts" / "p1.json").write_text(
+            json.dumps({"name": "greeting", "description": "Says hi"})
+        )
+
+        cursor = Cursor()
+        cfg = _cfg(name="my-mcp", agent="cursor", project=project)
+        server = MCPServer(name="my-mcp", configurations=[cfg])
+
+        with patch.object(
+            type(cursor),
+            "config_folder",
+            new_callable=lambda: property(lambda self: tmp_path / ".cursor"),
+        ):
+            result = cursor.discover_capabilities(server)
+
+        assert result is True
+        assert len(server.tools) == 1
+        assert server.tools[0].name == "do_thing"
+        assert len(server.resources) == 1
+        assert server.resources[0].uri == "file:///data"
+        assert len(server.prompts) == 1
+        assert server.prompts[0].name == "greeting"
+
+    def test_status_md_present_returns_false(self, tmp_path: Path):
+        project = Path("/home/user/project")
+        server_dir = self._setup_mcps_folder(tmp_path, project, "my-mcp")
+        (server_dir / "STATUS.md").write_text("disconnected")
+        (server_dir / "tools").mkdir()
+        (server_dir / "tools" / "t1.json").write_text(json.dumps({"name": "t"}))
+
+        cursor = Cursor()
+        cfg = _cfg(name="my-mcp", agent="cursor", project=project)
+        server = MCPServer(name="my-mcp", configurations=[cfg])
+
+        with patch.object(
+            type(cursor),
+            "config_folder",
+            new_callable=lambda: property(lambda self: tmp_path / ".cursor"),
+        ):
+            result = cursor.discover_capabilities(server)
+
+        assert result is False
+        assert len(server.tools) == 0
+
+    def test_no_matching_metadata_returns_false(self, tmp_path: Path):
+        project = Path("/home/user/project")
+        self._setup_mcps_folder(tmp_path, project, "other-server")
+
+        cursor = Cursor()
+        cfg = _cfg(name="my-mcp", agent="cursor", project=project)
+        server = MCPServer(name="my-mcp", configurations=[cfg])
+
+        with patch.object(
+            type(cursor),
+            "config_folder",
+            new_callable=lambda: property(lambda self: tmp_path / ".cursor"),
+        ):
+            result = cursor.discover_capabilities(server)
+
+        assert result is False
+
+    def test_non_cursor_configuration_skipped(self):
+        cursor = Cursor()
+        cfg = _cfg(name="srv", agent="claude-code", project=Path("/proj"))
+        server = MCPServer(name="srv", configurations=[cfg])
+        assert cursor.discover_capabilities(server) is False
 
 
 class TestCursorDiscoverProjectDirectories:

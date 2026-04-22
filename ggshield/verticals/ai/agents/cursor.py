@@ -3,10 +3,16 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 import click
+from pygitguardian.models import (
+    MCPArgumentInfo,
+    MCPPromptInfo,
+    MCPResourceInfo,
+    MCPToolInfo,
+)
 
 from ggshield.core.dirs import get_user_home_dir
 
-from ..models import Agent, EventType, HookResult
+from ..models import Agent, EventType, HookResult, MCPServer
 
 
 class Cursor(Agent):
@@ -80,3 +86,118 @@ class Cursor(Agent):
                 path = Path(data["folder"].removeprefix("file://"))
                 if path.is_dir():
                     yield path.resolve()
+
+    def discover_capabilities(self, server: MCPServer) -> bool:
+        # General Cursor strategy:
+        # For each project where Cursor was used, it created a folder with the project name
+        # in its configuration folder. Inside that folder, it stores metadata for every
+        # MCP server available in that project.
+        for configuration in server.configurations:
+            # Look for Cursor configurations
+            if configuration.agent != self.name:
+                continue
+            # We need a folder. Note: this also works for user-level configurations.
+            # as Cursor will have a `home-<username>` "project".
+            if configuration.project is None:
+                continue
+
+            # Lookup where Cursor stores the capabilities for the given project.
+            mangled = (
+                Path(configuration.project).as_posix().replace("/", "-").lstrip("-")
+            )
+            folder = self.config_folder / "projects" / mangled / "mcps"
+            if not folder.exists():
+                continue
+            # Look for a SERVER_METADATA.json file with the expected name.
+            # (each subfolder corresponds to a different MCP server)
+            for file in folder.glob("*/SERVER_METADATA.json"):
+                metadata = self._load_json_file(file)
+                if metadata and metadata.get("serverName") == configuration.name:
+                    # Found it! Update the folder
+                    folder = file.parent
+                    break
+            else:
+                # We didn't find our MCP server's metadata. Try next configuration.
+                continue
+
+            # If we reach this code, we found our MCP server's metadata folder.
+            # Hopefully it is connected. If not, Cursor creates a STATUS.md file.
+            if (folder / "STATUS.md").exists():
+                # Don't go further, we may risk discovering only an "mcp_auth" tool
+                # whereas the MCP server may be properly connected in another project.
+                continue
+
+            filled = False
+            # Tools
+            for file in folder.glob("tools/*.json"):
+                tool = self._load_json_file(file)
+                if not isinstance(tool, dict) or "name" not in tool:
+                    continue
+                server.tools.append(
+                    MCPToolInfo(
+                        name=tool["name"],
+                        description=tool.get("description", ""),
+                        arguments=_parse_tool_arguments(tool.get("arguments")),
+                    )
+                )
+                filled = True
+            # Resources
+            for file in folder.glob("resources/*.json"):
+                resource = self._load_json_file(file)
+                if not isinstance(resource, dict) or "uri" not in resource:
+                    continue
+                server.resources.append(
+                    MCPResourceInfo(
+                        uri=resource["uri"],
+                        name=resource.get("name", ""),
+                        description=resource.get("description", ""),
+                        mime_type=resource.get("mimeType", ""),
+                    )
+                )
+                filled = True
+            # Prompts
+            for file in folder.glob("prompts/*.json"):
+                prompt = self._load_json_file(file)
+                if not isinstance(prompt, dict) or "name" not in prompt:
+                    continue
+                server.prompts.append(
+                    MCPPromptInfo(
+                        name=prompt["name"], description=prompt.get("description", "")
+                    )
+                )
+                filled = True
+            if filled:
+                # Discovery done. Early return.
+                return True
+
+        return False
+
+
+def _parse_tool_arguments(
+    schema: Optional[Dict[str, Any]],
+) -> Optional[List[MCPArgumentInfo]]:
+    """Parse a JSON-Schema ``arguments`` object into a list of MCPArgumentInfo.
+
+    The schema is expected to follow the standard MCP tool descriptor format::
+
+        {"type": "object", "properties": {...}, "required": [...]}
+    """
+    if not isinstance(schema, dict):
+        return None
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    required_set = set(schema.get("required", []))
+    arguments: List[MCPArgumentInfo] = []
+    for name, prop in properties.items():
+        if not isinstance(prop, dict):
+            continue
+        arguments.append(
+            MCPArgumentInfo(
+                name=name,
+                type=prop.get("type", "string"),
+                description=prop.get("description"),
+                required=name in required_set,
+            )
+        )
+    return arguments or None

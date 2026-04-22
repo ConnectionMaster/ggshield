@@ -6,7 +6,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pygitguardian.models import MCPConfiguration
+from pygitguardian.models import MCPConfiguration, MCPServer
 
 from ggshield.core.scan import File, Scannable, StringScannable
 from ggshield.utils.files import is_path_binary
@@ -223,6 +223,13 @@ class Agent(ABC):
             results.extend(self._get_project_mcp_configurations(directory))
 
         return results
+
+    def discover_capabilities(self, server: MCPServer) -> bool:
+        """Discover capabilities for the given server.
+
+        Returns whether the capabilities were discovered.
+        """
+        return False
 
     # Helper methods
 

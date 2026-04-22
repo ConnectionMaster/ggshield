@@ -54,6 +54,13 @@ def discover_ai_configuration(machine_id: Optional[str] = None) -> AIDiscovery:
     # Merge MCP configurations into servers
     servers = _merge_mcp_configurations(mcp_configurations)
 
+    # Try to find the servers' capabilities
+    for server in servers:
+        for agent in AGENTS.values():
+            if agent.discover_capabilities(server):
+                # Discovery succeeded for this server. Early return.
+                break
+
     # Add user information
     user = get_user_info(machine_id=machine_id)
     discovery_duration = perf_counter() - start_time

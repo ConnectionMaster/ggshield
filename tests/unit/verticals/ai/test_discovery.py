@@ -99,14 +99,19 @@ class TestDiscoverAIConfiguration:
         agent1 = MagicMock()
         agent1.discover_project_directories.return_value = iter([])
         agent1.discover_mcp_configurations.return_value = [_cfg(name="s")]
+        agent1.discover_capabilities.return_value = True
 
         agent2 = MagicMock()
         agent2.discover_project_directories.return_value = iter([])
         agent2.discover_mcp_configurations.return_value = []
+        agent2.discover_capabilities.return_value = False
 
         mock_agents.values.return_value = [agent1, agent2]
 
         discover_ai_configuration()
+
+        agent1.discover_capabilities.assert_called_once()
+        agent2.discover_capabilities.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
