@@ -79,6 +79,10 @@ def status_cmd(ctx: click.Context, **kwargs: Any) -> None:
             status_str = ", ".join(status_parts)
             ui.display_info(f"  {plugin.display_name} ({plugin.name})")
             ui.display_info(f"    Status: {status_str}")
+            if installed_version:
+                sig_label = downloader.get_installed_signature_label(plugin.name)
+                if sig_label:
+                    ui.display_info(f"    Signature: {sig_label}")
             ui.display_info(f"    {plugin.description}")
         else:
             ui.display_info(f"  {plugin.display_name} ({plugin.name}) - not available")

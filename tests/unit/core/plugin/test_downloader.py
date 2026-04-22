@@ -21,7 +21,16 @@ from ggshield.core.plugin.downloader import (
     InsecureSourceError,
     PluginDownloader,
     get_plugins_dir,
+    get_signature_label,
 )
+from ggshield.core.plugin.signature import (
+    SignatureInfo,
+    SignatureStatus,
+    SignatureVerificationMode,
+)
+
+
+MOCK_SIG_INFO = SignatureInfo(status=SignatureStatus.SKIPPED)
 
 
 class TestPluginDownloader:
@@ -147,6 +156,23 @@ class TestPluginDownloader:
         assert downloader.uninstall("testplugin") is True
         assert not plugin_dir.exists()
 
+    def test_uninstall_removes_trust_record(self, tmp_path: Path) -> None:
+        """Test uninstall also removes any persisted trust exception."""
+        plugin_dir = tmp_path / "testplugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "manifest.json").write_text("{}")
+        (plugin_dir / "testplugin.whl").touch()
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        downloader.trust_store.trust_plugin("testplugin", "abc123", "missing")
+
+        assert downloader.uninstall("testplugin") is True
+        assert downloader.trust_store.get_record("testplugin") is None
+
     def test_download_and_install_success(self, tmp_path: Path) -> None:
         """Test successful download and install."""
         wheel_content = b"fake wheel content"
@@ -168,10 +194,14 @@ class TestPluginDownloader:
             "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
         ):
             with patch("requests.get", return_value=mock_response):
-                downloader = PluginDownloader()
-                wheel_path = downloader.download_and_install(
-                    download_info, "testplugin"
-                )
+                with patch(
+                    "ggshield.core.plugin.downloader.verify_wheel_signature",
+                    return_value=MOCK_SIG_INFO,
+                ):
+                    downloader = PluginDownloader()
+                    wheel_path = downloader.download_and_install(
+                        download_info, "testplugin"
+                    )
 
         assert wheel_path.exists()
         assert wheel_path.name == "testplugin-1.0.0.whl"
@@ -181,6 +211,88 @@ class TestPluginDownloader:
         manifest = json.loads((tmp_path / "testplugin" / "manifest.json").read_text())
         assert manifest["plugin_name"] == "testplugin"
         assert manifest["version"] == "1.0.0"
+
+    def test_download_and_install_records_trusted_unsigned_plugin(
+        self, tmp_path: Path
+    ) -> None:
+        """Test allow-unsigned installs persist trust for the exact wheel hash."""
+        wheel_content = b"fake wheel content"
+        sha256 = hashlib.sha256(wheel_content).hexdigest()
+
+        download_info = PluginDownloadInfo(
+            download_url="https://example.com/plugin.whl",
+            filename="testplugin-1.0.0.whl",
+            sha256=sha256,
+            version="1.0.0",
+            expires_at="2025-01-01T00:00:00Z",
+        )
+
+        mock_response = MagicMock()
+        mock_response.iter_content.return_value = [wheel_content]
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            with patch("requests.get", return_value=mock_response):
+                with patch(
+                    "ggshield.core.plugin.downloader.verify_wheel_signature",
+                    return_value=SignatureInfo(
+                        status=SignatureStatus.MISSING,
+                        message="No bundle found",
+                    ),
+                ):
+                    downloader = PluginDownloader()
+                    downloader.download_and_install(
+                        download_info,
+                        "testplugin",
+                        signature_mode=SignatureVerificationMode.WARN,
+                    )
+
+        record = downloader.trust_store.get_record("testplugin")
+        assert record is not None
+        assert record.sha256 == sha256
+        assert record.signature_status == "missing"
+
+    def test_download_and_install_removes_trust_record_for_signed_plugin(
+        self, tmp_path: Path
+    ) -> None:
+        """Test signed installs clear any previous unsigned trust exception."""
+        wheel_content = b"fake wheel content"
+        sha256 = hashlib.sha256(wheel_content).hexdigest()
+
+        download_info = PluginDownloadInfo(
+            download_url="https://example.com/plugin.whl",
+            filename="testplugin-1.0.0.whl",
+            sha256=sha256,
+            version="1.0.0",
+            expires_at="2025-01-01T00:00:00Z",
+        )
+
+        mock_response = MagicMock()
+        mock_response.iter_content.return_value = [wheel_content]
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            with patch("requests.get", return_value=mock_response):
+                with patch(
+                    "ggshield.core.plugin.downloader.verify_wheel_signature",
+                    return_value=SignatureInfo(
+                        status=SignatureStatus.VALID,
+                        identity="GitGuardian/satori",
+                    ),
+                ):
+                    downloader = PluginDownloader()
+                    downloader.trust_store.trust_plugin(
+                        "testplugin",
+                        sha256,
+                        "missing",
+                    )
+                    downloader.download_and_install(download_info, "testplugin")
+
+        assert downloader.trust_store.get_record("testplugin") is None
 
     def test_download_and_install_checksum_mismatch(self, tmp_path: Path) -> None:
         """Test download fails with checksum mismatch."""
@@ -278,18 +390,24 @@ class TestPluginDownloader:
             "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
         ):
             with patch("requests.get", return_value=mock_response):
-                downloader = PluginDownloader()
-
-                with patch.object(
-                    downloader, "_write_manifest", side_effect=OSError("disk full")
+                with patch(
+                    "ggshield.core.plugin.downloader.verify_wheel_signature",
+                    return_value=MOCK_SIG_INFO,
                 ):
-                    with pytest.raises(OSError):
-                        downloader.download_and_install(download_info, "testplugin")
+                    downloader = PluginDownloader()
 
-        wheel_path = tmp_path / "testplugin" / "testplugin-1.0.0.whl"
+                    with patch.object(
+                        downloader, "_write_manifest", side_effect=OSError("disk full")
+                    ):
+                        with pytest.raises(OSError):
+                            downloader.download_and_install(download_info, "testplugin")
+
         temp_path = tmp_path / "testplugin" / "testplugin-1.0.0.whl.tmp"
-        assert not wheel_path.exists()
         assert not temp_path.exists()
+        # The post-rename OSError from _write_manifest must trigger cleanup,
+        # otherwise a half-installed wheel would be left on disk.
+        wheel_path = tmp_path / "testplugin" / "testplugin-1.0.0.whl"
+        assert not wheel_path.exists()
 
     def test_is_installed_by_entry_point_name(self, tmp_path: Path) -> None:
         """Test is_installed finds plugin by entry point name."""
@@ -352,6 +470,48 @@ class TestPluginDownloader:
 
         # Should find version by entry point name
         assert downloader.get_installed_version("my_plugin") == "2.0.0"
+
+    def test_get_installed_signature_label_by_entry_point_name(
+        self, tmp_path: Path
+    ) -> None:
+        """Test signature label lookup follows entry point names for local wheels."""
+        plugin_dir = tmp_path / "package-name"
+        plugin_dir.mkdir()
+        wheel_path = plugin_dir / "package_name-1.0.0.whl"
+
+        with zipfile.ZipFile(wheel_path, "w") as zf:
+            zf.writestr(
+                "package_name-1.0.0.dist-info/entry_points.txt",
+                "[ggshield.plugins]\nmy_plugin = package_name.plugin:Plugin\n",
+            )
+
+        manifest = {
+            "plugin_name": "package-name",
+            "version": "1.0.0",
+            "wheel_filename": "package_name-1.0.0.whl",
+            "signature": {
+                "status": "missing",
+                "message": "No bundle found",
+            },
+        }
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        downloader.trust_store.trust_plugin(
+            plugin_dir.name,
+            downloader._compute_sha256(wheel_path),
+            "missing",
+        )
+
+        assert downloader.get_wheel_path("my_plugin") == wheel_path
+        assert (
+            downloader.get_installed_signature_label("my_plugin")
+            == "unsigned (trusted)"
+        )
 
     def test_uninstall_by_entry_point_name(self, tmp_path: Path) -> None:
         """Test uninstall can remove plugin by entry point name."""
@@ -503,10 +663,14 @@ class TestInstallFromWheel:
         with patch(
             "ggshield.core.plugin.downloader.get_plugins_dir", return_value=plugins_dir
         ):
-            downloader = PluginDownloader()
-            plugin_name, version, installed_path = downloader.install_from_wheel(
-                wheel_path
-            )
+            with patch(
+                "ggshield.core.plugin.downloader.verify_wheel_signature",
+                return_value=MOCK_SIG_INFO,
+            ):
+                downloader = PluginDownloader()
+                plugin_name, version, installed_path = downloader.install_from_wheel(
+                    wheel_path
+                )
 
         assert plugin_name == "myplugin"
         assert version == "2.0.0"
@@ -518,6 +682,43 @@ class TestInstallFromWheel:
         assert manifest["plugin_name"] == "myplugin"
         assert manifest["version"] == "2.0.0"
         assert manifest["source"]["type"] == "local_file"
+
+    def test_install_from_wheel_removes_stale_bundle_sidecars(
+        self, tmp_path: Path
+    ) -> None:
+        """A local reinstall must not reuse stale bundle sidecars from a previous install."""
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        wheel_path = create_test_wheel(source_dir, "myplugin", "2.0.0")
+
+        plugins_dir = tmp_path / "plugins"
+        plugin_dir = plugins_dir / "myplugin"
+        plugin_dir.mkdir(parents=True)
+
+        stale_sigstore = plugin_dir / f"{wheel_path.name}.sigstore"
+        stale_sigstore.write_bytes(b"stale-bundle")
+        stale_sigstore_json = plugin_dir / f"{wheel_path.name}.sigstore.json"
+        stale_sigstore_json.write_bytes(b"stale-bundle-json")
+
+        def _verify_without_stale_sidecars(dest_wheel_path: Path, *_args):
+            assert dest_wheel_path == plugin_dir / wheel_path.name
+            assert not stale_sigstore.exists()
+            assert not stale_sigstore_json.exists()
+            return MOCK_SIG_INFO
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=plugins_dir
+        ):
+            with patch(
+                "ggshield.core.plugin.downloader.verify_wheel_signature",
+                side_effect=_verify_without_stale_sidecars,
+            ):
+                downloader = PluginDownloader()
+                _, _, installed_path = downloader.install_from_wheel(wheel_path)
+
+        assert installed_path.exists()
+        assert not stale_sigstore.exists()
+        assert not stale_sigstore_json.exists()
 
     def test_install_from_wheel_invalid_wheel(self, tmp_path: Path) -> None:
         """Test installation fails with invalid wheel."""
@@ -561,11 +762,15 @@ class TestDownloadFromUrl:
             "ggshield.core.plugin.downloader.get_plugins_dir", return_value=plugins_dir
         ):
             with patch("requests.get", return_value=mock_response):
-                downloader = PluginDownloader()
-                plugin_name, version, installed_path = downloader.download_from_url(
-                    "https://example.com/urlplugin-1.0.0.whl",
-                    sha256=sha256,
-                )
+                with patch(
+                    "ggshield.core.plugin.downloader.verify_wheel_signature",
+                    return_value=MOCK_SIG_INFO,
+                ):
+                    downloader = PluginDownloader()
+                    plugin_name, version, installed_path = downloader.download_from_url(
+                        "https://example.com/urlplugin-1.0.0.whl",
+                        sha256=sha256,
+                    )
 
         assert plugin_name == "urlplugin"
         assert version == "1.0.0"
@@ -640,11 +845,15 @@ class TestDownloadFromGitHubRelease:
             "ggshield.core.plugin.downloader.get_plugins_dir", return_value=plugins_dir
         ):
             with patch("requests.get", return_value=mock_response):
-                downloader = PluginDownloader()
-                plugin_name, version, _ = downloader.download_from_github_release(
-                    "https://github.com/owner/repo/releases/download/v1.0.0/ghplugin-1.0.0.whl",
-                    sha256=sha256,
-                )
+                with patch(
+                    "ggshield.core.plugin.downloader.verify_wheel_signature",
+                    return_value=MOCK_SIG_INFO,
+                ):
+                    downloader = PluginDownloader()
+                    plugin_name, version, _ = downloader.download_from_github_release(
+                        "https://github.com/owner/repo/releases/download/v1.0.0/ghplugin-1.0.0.whl",
+                        sha256=sha256,
+                    )
 
         assert plugin_name == "ghplugin"
         assert version == "1.0.0"
@@ -927,11 +1136,15 @@ class TestDownloadFromUrlEdgeCases:
             "ggshield.core.plugin.downloader.get_plugins_dir", return_value=plugins_dir
         ):
             with patch("requests.get", return_value=mock_response):
-                downloader = PluginDownloader()
-                plugin_name, version, _ = downloader.download_from_url(
-                    "https://example.com/download?file=something",
-                    sha256=sha256,
-                )
+                with patch(
+                    "ggshield.core.plugin.downloader.verify_wheel_signature",
+                    return_value=MOCK_SIG_INFO,
+                ):
+                    downloader = PluginDownloader()
+                    plugin_name, version, _ = downloader.download_from_url(
+                        "https://example.com/download?file=something",
+                        sha256=sha256,
+                    )
 
         assert plugin_name == "testplugin"
         assert version == "1.0.0"
@@ -964,13 +1177,17 @@ class TestGitHubArtifactEdgeCases:
             "ggshield.core.plugin.downloader.get_plugins_dir", return_value=plugins_dir
         ):
             with patch("requests.get", return_value=mock_response):
-                with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
-                    downloader = PluginDownloader()
-                    plugin_name, version, installed_path = (
-                        downloader.download_from_github_artifact(
-                            "https://github.com/owner/repo/actions/runs/123/artifacts/456"
+                with patch(
+                    "ggshield.core.plugin.downloader.verify_wheel_signature",
+                    return_value=MOCK_SIG_INFO,
+                ):
+                    with patch.dict("os.environ", {"GITHUB_TOKEN": "test-token"}):
+                        downloader = PluginDownloader()
+                        plugin_name, version, installed_path = (
+                            downloader.download_from_github_artifact(
+                                "https://github.com/owner/repo/actions/runs/123/artifacts/456"
+                            )
                         )
-                    )
 
         assert plugin_name == "artifactplugin"
         assert version == "1.0.0"
@@ -1095,6 +1312,355 @@ class TestGetGhToken:
                 token = downloader._get_gh_token()
 
             assert token is None
+
+
+class TestGetSignatureLabel:
+    """Tests for get_signature_label."""
+
+    def test_returns_none_when_no_signature(self) -> None:
+        manifest: dict = {"plugin_name": "test", "version": "1.0.0"}
+        assert get_signature_label(manifest) is None
+
+    def test_returns_none_when_signature_is_empty(self) -> None:
+        manifest: dict = {"signature": {}}
+        assert get_signature_label(manifest) is None
+
+    def test_returns_signed_with_identity(self) -> None:
+        manifest: dict = {
+            "signature": {
+                "status": "valid",
+                "identity": "GitGuardian/satori",
+            }
+        }
+        assert get_signature_label(manifest) == "signed (GitGuardian/satori)"
+
+    def test_returns_status_without_identity(self) -> None:
+        manifest: dict = {"signature": {"status": "missing"}}
+        assert get_signature_label(manifest) == "missing"
+
+    def test_returns_trusted_unsigned_label(self) -> None:
+        manifest: dict = {"signature": {"status": "missing"}}
+        assert (
+            get_signature_label(manifest, trusted_unsigned=True) == "unsigned (trusted)"
+        )
+
+    def test_returns_unknown_when_no_status(self) -> None:
+        manifest: dict = {"signature": {"identity": "org/repo"}}
+        assert get_signature_label(manifest) == "unknown (org/repo)"
+
+
+class TestDownloadBundle:
+    """Tests for _download_bundle method."""
+
+    def test_returns_none_when_no_signature_url(self, tmp_path: Path) -> None:
+        download_info = PluginDownloadInfo(
+            download_url="https://example.com/plugin.whl",
+            filename="plugin-1.0.0.whl",
+            sha256="abc",
+            version="1.0.0",
+            expires_at="2025-01-01T00:00:00Z",
+            signature_url=None,
+        )
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        result = downloader._download_bundle(download_info, tmp_path)
+        assert result is None
+
+    def test_downloads_bundle_successfully(self, tmp_path: Path) -> None:
+        download_info = PluginDownloadInfo(
+            download_url="https://example.com/plugin.whl",
+            filename="plugin-1.0.0.whl",
+            sha256="abc",
+            version="1.0.0",
+            expires_at="2025-01-01T00:00:00Z",
+            signature_url="https://example.com/plugin.whl.sigstore",
+        )
+
+        mock_response = MagicMock()
+        mock_response.iter_content.return_value = [b"bundle-content"]
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        with patch("requests.get", return_value=mock_response):
+            result = downloader._download_bundle(download_info, tmp_path)
+
+        assert result is not None
+        assert result.name == "plugin-1.0.0.whl.sigstore"
+        assert result.read_bytes() == b"bundle-content"
+
+    def test_returns_none_on_network_error(self, tmp_path: Path) -> None:
+        download_info = PluginDownloadInfo(
+            download_url="https://example.com/plugin.whl",
+            filename="plugin-1.0.0.whl",
+            sha256="abc",
+            version="1.0.0",
+            expires_at="2025-01-01T00:00:00Z",
+            signature_url="https://example.com/plugin.whl.sigstore",
+        )
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        with patch(
+            "requests.get", side_effect=requests.RequestException("Network error")
+        ):
+            result = downloader._download_bundle(download_info, tmp_path)
+
+        assert result is None
+
+    def test_removes_partial_bundle_on_mid_stream_error(self, tmp_path: Path) -> None:
+        """If iter_content raises after open(), the partial file is unlinked."""
+        download_info = PluginDownloadInfo(
+            download_url="https://example.com/plugin.whl",
+            filename="plugin-1.0.0.whl",
+            sha256="abc",
+            version="1.0.0",
+            expires_at="2025-01-01T00:00:00Z",
+            signature_url="https://example.com/plugin.whl.sigstore",
+        )
+
+        def iter_boom(*_args, **_kwargs):
+            yield b"partial"
+            raise OSError("connection reset")
+
+        mock_response = MagicMock()
+        mock_response.iter_content.side_effect = iter_boom
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        with patch("requests.get", return_value=mock_response):
+            with pytest.raises(OSError):
+                downloader._download_bundle(download_info, tmp_path)
+
+        assert not (tmp_path / "plugin-1.0.0.whl.sigstore").exists()
+
+
+class TestDownloadUrlBundle:
+    """Tests for _download_url_bundle method."""
+
+    def test_returns_none_when_no_bundle_found(self, tmp_path: Path) -> None:
+        wheel_path = tmp_path / "plugin-1.0.0.whl"
+        wheel_path.write_bytes(b"wheel")
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        with patch("requests.get", side_effect=requests.RequestException("404")):
+            result = downloader._download_url_bundle(
+                "https://example.com/plugin-1.0.0.whl", wheel_path
+            )
+
+        assert result is None
+        assert not (tmp_path / "plugin-1.0.0.whl.sigstore").exists()
+        assert not (tmp_path / "plugin-1.0.0.whl.sigstore.json").exists()
+
+    def test_falls_back_to_sigstore_json(self, tmp_path: Path) -> None:
+        wheel_path = tmp_path / "plugin-1.0.0.whl"
+        wheel_path.write_bytes(b"wheel")
+
+        success_response = MagicMock()
+        success_response.iter_content.return_value = [b"json-bundle"]
+        success_response.raise_for_status = MagicMock()
+
+        def fake_get(url, **_kwargs):
+            if url.endswith(".sigstore"):
+                raise requests.RequestException("not found")
+            return success_response
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        with patch("requests.get", side_effect=fake_get):
+            result = downloader._download_url_bundle(
+                "https://example.com/plugin-1.0.0.whl", wheel_path
+            )
+
+        assert result is not None
+        assert result.name == "plugin-1.0.0.whl.sigstore.json"
+        assert result.read_bytes() == b"json-bundle"
+
+    def test_removes_partial_bundle_on_mid_stream_error(self, tmp_path: Path) -> None:
+        """If iter_content raises after open(), the partial file is unlinked."""
+        wheel_path = tmp_path / "plugin-1.0.0.whl"
+        wheel_path.write_bytes(b"wheel")
+
+        def iter_boom(*_args, **_kwargs):
+            yield b"partial"
+            raise OSError("connection reset")
+
+        mock_response = MagicMock()
+        mock_response.iter_content.side_effect = iter_boom
+        mock_response.raise_for_status = MagicMock()
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        with patch("requests.get", return_value=mock_response):
+            with pytest.raises(OSError):
+                downloader._download_url_bundle(
+                    "https://example.com/plugin-1.0.0.whl", wheel_path
+                )
+
+        assert not (tmp_path / "plugin-1.0.0.whl.sigstore").exists()
+
+
+class TestCleanupFailedInstall:
+    """Tests for _cleanup_failed_install method."""
+
+    def test_removes_wheel_file(self, tmp_path: Path) -> None:
+        wheel_path = tmp_path / "plugin-1.0.0.whl"
+        wheel_path.write_bytes(b"wheel")
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        downloader._cleanup_failed_install(wheel_path)
+        assert not wheel_path.exists()
+
+    def test_removes_bundle_files(self, tmp_path: Path) -> None:
+        wheel_path = tmp_path / "plugin-1.0.0.whl"
+        wheel_path.write_bytes(b"wheel")
+        sigstore = tmp_path / "plugin-1.0.0.whl.sigstore"
+        sigstore.write_bytes(b"bundle")
+        sigstore_json = tmp_path / "plugin-1.0.0.whl.sigstore.json"
+        sigstore_json.write_bytes(b"bundle2")
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        downloader._cleanup_failed_install(wheel_path)
+        assert not wheel_path.exists()
+        assert not sigstore.exists()
+        assert not sigstore_json.exists()
+
+    def test_handles_nonexistent_files(self, tmp_path: Path) -> None:
+        wheel_path = tmp_path / "nonexistent.whl"
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        # Should not raise
+        downloader._cleanup_failed_install(wheel_path)
+
+
+class TestWriteManifestWithSignature:
+    """Tests for _write_manifest with signature_info."""
+
+    def test_manifest_includes_signature_when_valid(self, tmp_path: Path) -> None:
+        sig_info = SignatureInfo(
+            status=SignatureStatus.VALID,
+            identity="GitGuardian/satori",
+        )
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        downloader._write_manifest(
+            plugin_dir=tmp_path,
+            plugin_name="test",
+            version="1.0.0",
+            wheel_filename="test-1.0.0.whl",
+            sha256="abc",
+            source=PluginSource(type=PluginSourceType.GITGUARDIAN_API),
+            signature_info=sig_info,
+        )
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        assert manifest["signature"]["status"] == "valid"
+        assert manifest["signature"]["identity"] == "GitGuardian/satori"
+        assert "message" not in manifest["signature"]
+
+    def test_manifest_includes_signature_message(self, tmp_path: Path) -> None:
+        sig_info = SignatureInfo(
+            status=SignatureStatus.MISSING,
+            message="No bundle found",
+        )
+
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        downloader._write_manifest(
+            plugin_dir=tmp_path,
+            plugin_name="test",
+            version="1.0.0",
+            wheel_filename="test-1.0.0.whl",
+            sha256="abc",
+            source=PluginSource(type=PluginSourceType.GITGUARDIAN_API),
+            signature_info=sig_info,
+        )
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        assert manifest["signature"]["status"] == "missing"
+        assert manifest["signature"]["message"] == "No bundle found"
+
+    def test_manifest_omits_signature_when_none(self, tmp_path: Path) -> None:
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        downloader._write_manifest(
+            plugin_dir=tmp_path,
+            plugin_name="test",
+            version="1.0.0",
+            wheel_filename="test-1.0.0.whl",
+            sha256="abc",
+            source=PluginSource(type=PluginSourceType.GITGUARDIAN_API),
+        )
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        assert "signature" not in manifest
+
+    def test_tmp_file_is_cleaned_up_on_rename_failure(self, tmp_path: Path) -> None:
+        """If replace() fails, the .tmp file is removed and no manifest is left."""
+        with patch(
+            "ggshield.core.plugin.downloader.get_plugins_dir", return_value=tmp_path
+        ):
+            downloader = PluginDownloader()
+
+        with patch("pathlib.Path.replace", side_effect=OSError("cross-device rename")):
+            with pytest.raises(OSError):
+                downloader._write_manifest(
+                    plugin_dir=tmp_path,
+                    plugin_name="test",
+                    version="1.0.0",
+                    wheel_filename="test-1.0.0.whl",
+                    sha256="abc",
+                    source=PluginSource(type=PluginSourceType.GITGUARDIAN_API),
+                )
+
+        assert not (tmp_path / "manifest.json").exists()
+        assert not (tmp_path / "manifest.json.tmp").exists()
 
 
 def _create_artifact_zip(content: bytes, filename: str) -> bytes:

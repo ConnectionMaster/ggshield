@@ -221,6 +221,7 @@ class TestPluginStatus:
 
             mock_downloader = mock.MagicMock()
             mock_downloader.get_installed_version.return_value = "1.0.0"
+            mock_downloader.get_installed_signature_label.return_value = None
             mock_downloader_class.return_value = mock_downloader
 
             result = cli_fs_runner.invoke(
@@ -230,6 +231,66 @@ class TestPluginStatus:
         assert result.exit_code == ExitCode.SUCCESS
         assert "installed v1.0.0" in result.output
         assert "update available: v1.1.0" in result.output
+
+    def test_status_shows_signature_label_for_installed_plugin(self, cli_fs_runner):
+        """
+        GIVEN an installed plugin with persisted trust metadata
+        WHEN running 'ggshield plugin status'
+        THEN it shows the human-readable signature label.
+        """
+        mock_catalog = PluginCatalog(
+            plan="Enterprise",
+            plugins=[
+                PluginInfo(
+                    name="tokenscanner",
+                    display_name="Token Scanner",
+                    description="Local secret scanning",
+                    available=True,
+                    latest_version="1.0.0",
+                    reason=None,
+                ),
+            ],
+            features={},
+        )
+
+        with (
+            mock.patch(
+                "ggshield.cmd.plugin.status.create_client_from_config"
+            ) as mock_create_client,
+            mock.patch(
+                "ggshield.cmd.plugin.status.PluginAPIClient"
+            ) as mock_plugin_api_client_class,
+            mock.patch(
+                "ggshield.cmd.plugin.status.EnterpriseConfig"
+            ) as mock_config_class,
+            mock.patch(
+                "ggshield.cmd.plugin.status.PluginDownloader"
+            ) as mock_downloader_class,
+        ):
+            mock_client = mock.MagicMock()
+            mock_create_client.return_value = mock_client
+
+            mock_plugin_api_client = mock.MagicMock()
+            mock_plugin_api_client.get_available_plugins.return_value = mock_catalog
+            mock_plugin_api_client_class.return_value = mock_plugin_api_client
+
+            mock_config = mock.MagicMock()
+            mock_config.is_plugin_enabled.return_value = True
+            mock_config_class.load.return_value = mock_config
+
+            mock_downloader = mock.MagicMock()
+            mock_downloader.get_installed_version.return_value = "1.0.0"
+            mock_downloader.get_installed_signature_label.return_value = (
+                "unsigned (trusted)"
+            )
+            mock_downloader_class.return_value = mock_downloader
+
+            result = cli_fs_runner.invoke(
+                cli, ["plugin", "status"], catch_exceptions=False
+            )
+
+        assert result.exit_code == ExitCode.SUCCESS
+        assert "Signature: unsigned (trusted)" in result.output
 
     def test_status_api_error(self, cli_fs_runner):
         """
@@ -337,6 +398,7 @@ class TestPluginStatus:
 
             mock_downloader = mock.MagicMock()
             mock_downloader.get_installed_version.return_value = "1.0.0"
+            mock_downloader.get_installed_signature_label.return_value = None
             mock_downloader_class.return_value = mock_downloader
 
             result = cli_fs_runner.invoke(

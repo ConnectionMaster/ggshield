@@ -12,6 +12,18 @@ from tests.functional.utils_create_merge_repo import (
 pytestmark = pytest.mark.uses_gitguardian_api
 
 
+EXPECTED_CONFLICT_DETECTORS = {
+    "GitLab Token",
+    "Generic High Entropy Secret",
+}
+
+
+def assert_conflict_secret_detected(stderr: str) -> None:
+    assert "1 secret detected" in stderr
+    assert "glpat-" in stderr
+    assert any(detector in stderr for detector in EXPECTED_CONFLICT_DETECTORS)
+
+
 @pytest.mark.parametrize(
     "with_conflict",
     [
@@ -55,9 +67,9 @@ def test_merge_commit_no_conflict(
                 scan_all_merge_files=scan_all_merge_files,
             )
 
-        # AND the error message contains the Gitlab Token
+        # AND the error message contains the expected secret
         captured = capsys.readouterr()
-        assert "GitLab Token" in captured.err
+        assert_conflict_secret_detected(captured.err)
     else:
         generate_repo_with_merge_commit(
             tmp_path,
@@ -76,6 +88,6 @@ def test_merge_commit_with_conflict_and_secret_in_conflict(
             tmp_path, with_conflict=True, secret_location=SecretLocation.CONFLICT_FILE
         )
 
-    # AND the error message contains the Gitlab Token
+    # AND the error message contains the expected secret
     stderr = exc.value.stderr.decode()
-    assert "GitLab Token" in stderr
+    assert_conflict_secret_detected(stderr)

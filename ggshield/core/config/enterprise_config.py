@@ -2,6 +2,8 @@
 Enterprise configuration - plugin settings.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -31,7 +33,7 @@ class EnterpriseConfig:
     plugins: Dict[str, PluginConfig] = field(default_factory=dict)
 
     @classmethod
-    def load(cls) -> "EnterpriseConfig":
+    def load(cls) -> EnterpriseConfig:
         """Load enterprise config from file."""
         config_path = get_enterprise_config_filepath()
         data = load_yaml_dict(config_path)

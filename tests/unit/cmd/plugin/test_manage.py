@@ -240,12 +240,19 @@ class TestPluginUninstall:
         WHEN running 'ggshield plugin uninstall <plugin>'
         THEN an error is shown
         """
-        with mock.patch(
-            "ggshield.cmd.plugin.manage.PluginDownloader"
-        ) as mock_downloader_class:
+        with (
+            mock.patch(
+                "ggshield.cmd.plugin.manage.PluginDownloader"
+            ) as mock_downloader_class,
+            mock.patch("ggshield.core.plugin.loader.PluginLoader") as mock_loader_class,
+        ):
             mock_downloader = mock.MagicMock()
             mock_downloader.is_installed.return_value = False
             mock_downloader_class.return_value = mock_downloader
+
+            mock_loader = mock.MagicMock()
+            mock_loader.discover_plugins.return_value = []
+            mock_loader_class.return_value = mock_loader
 
             result = cli_fs_runner.invoke(cli, ["plugin", "uninstall", "notinstalled"])
 

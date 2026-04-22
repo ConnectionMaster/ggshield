@@ -59,11 +59,13 @@ class TestEnterpriseConfig:
         assert config.plugins["test-plugin"].version == "1.0.0"
 
     def test_disable_plugin_missing_raises(self) -> None:
-        """Test disabling a missing plugin raises an error."""
+        """Disabling an unknown plugin raises ValueError."""
         config = EnterpriseConfig()
 
         with pytest.raises(ValueError, match="not configured"):
             config.disable_plugin("test-plugin")
+
+        assert "test-plugin" not in config.plugins
 
     def test_disable_existing_plugin(self) -> None:
         """Test disabling an already configured plugin."""
@@ -74,10 +76,10 @@ class TestEnterpriseConfig:
         assert config.plugins["test-plugin"].enabled is False
 
     def test_is_plugin_enabled_default(self) -> None:
-        """Test that plugins are disabled by default."""
+        """Test that plugins are disabled by default when not explicitly configured."""
         config = EnterpriseConfig()
 
-        # Plugin not in config should be considered disabled
+        # Plugin not in config should be considered disabled by default
         assert config.is_plugin_enabled("nonexistent") is False
 
     def test_is_plugin_enabled_explicit(self) -> None:
@@ -151,6 +153,52 @@ class TestEnterpriseConfig:
             assert "test-plugin" in loaded.plugins
             assert loaded.plugins["test-plugin"].enabled is True
             assert loaded.plugins["test-plugin"].version == "1.0.0"
+
+    def test_load_ignores_legacy_signature_mode(self, tmp_path: Path) -> None:
+        """Legacy plugin_signature_mode entries are ignored when loading config."""
+        config_path = tmp_path / "enterprise_config.yaml"
+        config_path.write_text(
+            """
+plugin_signature_mode: warn
+plugins:
+  test-plugin:
+    enabled: true
+    version: 1.0.0
+"""
+        )
+
+        with patch(
+            "ggshield.core.config.enterprise_config.get_enterprise_config_filepath"
+        ) as mock_path:
+            mock_path.return_value = config_path
+
+            config = EnterpriseConfig.load()
+
+            assert config.plugins["test-plugin"].enabled is True
+            assert config.plugins["test-plugin"].version == "1.0.0"
+
+    def test_save_drops_legacy_signature_mode(self, tmp_path: Path) -> None:
+        """Saving config rewrites legacy plugin_signature_mode entries away."""
+        config_path = tmp_path / "enterprise_config.yaml"
+        config_path.write_text(
+            """
+plugin_signature_mode: warn
+plugins:
+  test-plugin:
+    enabled: true
+    version: 1.0.0
+"""
+        )
+
+        with patch(
+            "ggshield.core.config.enterprise_config.get_enterprise_config_filepath"
+        ) as mock_path:
+            mock_path.return_value = config_path
+
+            config = EnterpriseConfig.load()
+            config.save()
+
+            assert "plugin_signature_mode" not in config_path.read_text()
 
     def test_load_simple_format(self, tmp_path: Path) -> None:
         """Test loading config with simple boolean format."""

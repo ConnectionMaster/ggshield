@@ -20,10 +20,19 @@ class TestPluginList:
         THEN it shows a message about no plugins
         """
         # Mock the loader to return empty list
-        with mock.patch.object(plugin_list_module, "PluginLoader") as mock_loader_class:
+        with (
+            mock.patch.object(plugin_list_module, "PluginLoader") as mock_loader_class,
+            mock.patch.object(
+                plugin_list_module, "PluginDownloader"
+            ) as mock_downloader_class,
+        ):
             mock_loader = mock.MagicMock()
             mock_loader.discover_plugins.return_value = []
             mock_loader_class.return_value = mock_loader
+
+            mock_downloader = mock.MagicMock()
+            mock_downloader.get_installed_signature_label.return_value = None
+            mock_downloader_class.return_value = mock_downloader
 
             result = cli_fs_runner.invoke(cli, ["plugin", "list"])
 
@@ -59,10 +68,22 @@ class TestPluginList:
             ),
         ]
 
-        with mock.patch.object(plugin_list_module, "PluginLoader") as mock_loader_class:
+        with (
+            mock.patch.object(plugin_list_module, "PluginLoader") as mock_loader_class,
+            mock.patch.object(
+                plugin_list_module, "PluginDownloader"
+            ) as mock_downloader_class,
+        ):
             mock_loader = mock.MagicMock()
             mock_loader.discover_plugins.return_value = mock_plugins
             mock_loader_class.return_value = mock_loader
+
+            mock_downloader = mock.MagicMock()
+            mock_downloader.get_installed_signature_label.side_effect = [
+                None,
+                "unsigned (trusted)",
+            ]
+            mock_downloader_class.return_value = mock_downloader
 
             result = cli_fs_runner.invoke(cli, ["plugin", "list"])
 
@@ -74,6 +95,7 @@ class TestPluginList:
         assert "otherplugin" in result.output
         assert "disabled" in result.output
         assert "local" in result.output
+        assert "signature: unsigned (trusted)" in result.output
 
     def test_list_plugin_versions(self, cli_fs_runner):
         """
@@ -94,10 +116,19 @@ class TestPluginList:
             ),
         ]
 
-        with mock.patch.object(plugin_list_module, "PluginLoader") as mock_loader_class:
+        with (
+            mock.patch.object(plugin_list_module, "PluginLoader") as mock_loader_class,
+            mock.patch.object(
+                plugin_list_module, "PluginDownloader"
+            ) as mock_downloader_class,
+        ):
             mock_loader = mock.MagicMock()
             mock_loader.discover_plugins.return_value = mock_plugins
             mock_loader_class.return_value = mock_loader
+
+            mock_downloader = mock.MagicMock()
+            mock_downloader.get_installed_signature_label.return_value = None
+            mock_downloader_class.return_value = mock_downloader
 
             result = cli_fs_runner.invoke(cli, ["plugin", "list"])
 
