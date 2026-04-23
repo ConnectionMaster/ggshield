@@ -1,12 +1,14 @@
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 import click
+from pygitguardian.models import AIDiscovery, MCPActivityRequest
 
 from ggshield.core.dirs import get_user_home_dir
 
-from ..models import Agent, EventType, HookResult, MCPConfiguration, Scope
+from ..models import Agent, EventType, HookPayload, HookResult, MCPConfiguration, Scope
 
 
 class Claude(Agent):
@@ -147,3 +149,42 @@ class Claude(Agent):
         for project in projects:
             if project.is_dir():
                 yield project.resolve()
+
+    def parse_mcp_activity(
+        self, payload: HookPayload, ai_config: AIDiscovery
+    ) -> MCPActivityRequest:
+        """Parse the MCP activity from an MCP hook payload."""
+
+        # Claude Code's hook tool name is "mcp__{server}__{tool}"
+        raw_tool_name: str = payload.raw.get("tool_name", "")
+        parts = raw_tool_name.split("__")
+        # The server name can be anything, but we assume no MCP tool has a "__" in its name
+        tool = parts[-1]
+        server_cfg_name = "__".join(parts[1:-1])
+
+        # Lookup the server name based on its configuration name
+        # Fallback to the server name if not found
+        server_name = server_cfg_name
+        for server in ai_config.servers:
+            for configuration in server.configurations:
+                if _mangle_server_name(configuration.name) == server_cfg_name:
+                    server_name = server.name
+                    break
+
+        return MCPActivityRequest(
+            user=ai_config.user,
+            tool=tool,
+            server=server_name,
+            agent=self.name,
+            model="",
+            cwd=payload.raw.get("cwd", ""),
+            input=payload.raw.get("tool_input", {}),
+        )
+
+
+MANGLING_PATTERN = re.compile(r"[^A-Za-z0-9-]")
+
+
+def _mangle_server_name(name: str) -> str:
+    """Mangle a server name in the same way Claude Code does."""
+    return MANGLING_PATTERN.sub("_", name)

@@ -33,6 +33,7 @@ class TestHookPayloadScannable:
             content="",
             identifier=str(f),
             agent=Cursor(),
+            raw={},
         )
         assert isinstance(payload.scannable, File)
 
@@ -43,6 +44,7 @@ class TestHookPayloadScannable:
             content="some content",
             identifier="/nonexistent/path.txt",
             agent=Cursor(),
+            raw={},
         )
         assert isinstance(payload.scannable, StringScannable)
 
@@ -55,6 +57,7 @@ class TestHookPayloadScannable:
             content="",
             identifier=str(f),
             agent=Cursor(),
+            raw={},
         )
         assert isinstance(payload.scannable, StringScannable)
 
@@ -65,6 +68,7 @@ class TestHookPayloadScannable:
             content="echo hello",
             identifier="cmd",
             agent=Cursor(),
+            raw={},
         )
         assert isinstance(payload.scannable, StringScannable)
 
@@ -89,6 +93,7 @@ class TestHookPayloadEmpty:
             content=content,
             identifier="id",
             agent=Cursor(),
+            raw={},
         )
         assert payload.empty is expected
 
@@ -106,6 +111,7 @@ class TestHookResultAllow:
             content="hi",
             identifier="id",
             agent=Cursor(),
+            raw={},
         )
         result = HookResult.allow(payload)
         assert result.block is False

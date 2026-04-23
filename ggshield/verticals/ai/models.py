@@ -6,7 +6,12 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pygitguardian.models import MCPConfiguration, MCPServer
+from pygitguardian.models import (
+    AIDiscovery,
+    MCPActivityRequest,
+    MCPConfiguration,
+    MCPServer,
+)
 
 from ggshield.core.scan import File, Scannable, StringScannable
 from ggshield.utils.files import is_path_binary
@@ -33,6 +38,7 @@ class Tool(Enum):
 
     BASH = auto()
     READ = auto()
+    MCP = auto()
     # We are not interested in other tools for now
     OTHER = auto()
 
@@ -58,6 +64,7 @@ class HookPayload:
     content: str
     identifier: str
     agent: "Agent"
+    raw: Dict[str, Any]
 
     @property
     def scannable(self) -> Scannable:
@@ -230,6 +237,15 @@ class Agent(ABC):
         Returns whether the capabilities were discovered.
         """
         return False
+
+    @abstractmethod
+    def parse_mcp_activity(
+        self, payload: HookPayload, ai_config: AIDiscovery
+    ) -> MCPActivityRequest:
+        """Parse the MCP activity from an MCP hook payload.
+
+        Implementations can assume that the payload is an MCP pre-tool use.
+        """
 
     # Helper methods
 
