@@ -1,0 +1,144 @@
+"""
+MCP Discover command - Discovers MCP servers and optionally probes them
+for tools, resources, and prompts.
+"""
+
+import json
+from typing import Any, Dict, List
+
+import click
+from pygitguardian.models import AIDiscovery
+
+from ggshield.cmd.utils.common_options import add_common_options
+from ggshield.cmd.utils.context_obj import ContextObj
+from ggshield.core import ui
+from ggshield.core.client import create_client_from_config
+from ggshield.core.errors import APIKeyCheckError, UnknownInstanceError
+from ggshield.core.text_utils import STYLE, format_text, pluralize
+from ggshield.verticals.ai.agents import AGENTS
+from ggshield.verticals.ai.discovery import (
+    discover_ai_configuration,
+    save_discovery_cache,
+    submit_ai_discovery,
+)
+from ggshield.verticals.ai.models import Scope
+
+
+@click.command(name="discover")
+@click.option(
+    "--json",
+    "use_json",
+    is_flag=True,
+    default=False,
+    help="Output as JSON",
+)
+@add_common_options()
+@click.pass_context
+def discover_cmd(
+    ctx: click.Context,
+    use_json: bool,
+    **kwargs: Any,
+) -> None:
+    """
+    Discover MCP servers and their configuration.
+
+    Parses MCP configuration files from supported assistants
+
+    Examples:
+      ggshield mcp discover
+      ggshield mcp discover --json
+    """
+
+    config = discover_ai_configuration()
+
+    summary = _summarize_discovery(config)
+
+    if use_json:
+        click.echo(json.dumps(summary, indent=2))
+    else:
+        print_summary(summary)
+
+    ctx_obj = ContextObj.get(ctx)
+    try:
+        client = create_client_from_config(ctx_obj.config)
+    except (APIKeyCheckError, UnknownInstanceError) as exc:
+        ui.display_warning(
+            f"Skipping upload of AI discovery to GitGuardian ({exc}). "
+            "Authenticate with `ggshield auth login` to enable upload."
+        )
+        return
+
+    try:
+        config = submit_ai_discovery(client, config)
+        save_discovery_cache(config)
+    except Exception as exc:
+        ui.display_warning(f"Could not upload AI discovery to GitGuardian: {exc}")
+
+
+def _summarize_discovery(config: AIDiscovery) -> Dict[str, Any]:
+    """Summarize what we want to show of the discovery."""
+    agent_names = set()
+    servers = []
+    for server in config.servers:
+        projects = set()
+        installed_globally = False
+        for conf in server.configurations:
+            agent_names.add(conf.agent)
+            if conf.scope == Scope.USER:
+                installed_globally = True
+            elif conf.project:
+                projects.add(conf.project)
+        servers.append(
+            {
+                "name": server.display_name or server.name,
+                "installed_globally": installed_globally,
+                "projects": sorted(projects),
+            }
+        )
+    return {
+        "agents": [AGENTS[name].display_name for name in agent_names],
+        "servers": servers,
+    }
+
+
+def print_summary(summary: Dict[str, Any]) -> None:
+    """Print the summary of the discovery."""
+    agents: List[str] = summary.get("agents", [])
+    servers: List[Dict[str, Any]] = summary.get("servers", [])
+
+    nb_servers = len(servers)
+    nb_agents = len(agents)
+
+    if nb_servers == 0:
+        click.echo(format_text("No MCP servers discovered", STYLE["no_secret"]))
+        return
+
+    click.echo(
+        f"\n{format_text('Agents discovered:', STYLE['key'])} "
+        f"{', '.join(format_text(agent, STYLE['detector']) for agent in agents) if agents else 'none'} "
+        f"({nb_agents} {pluralize('agent', nb_agents)})"
+    )
+    click.echo(
+        f"{format_text('MCP servers found:', STYLE['key'])} "
+        f"{nb_servers} {pluralize('server', nb_servers)}\n"
+    )
+
+    for i, server in enumerate(servers, start=1):
+        name = server.get("name", "unknown")
+        installed_globally = server.get("installed_globally", False)
+        projects: List[str] = server.get("projects", [])
+
+        start = format_text(">", STYLE["detector_line_start"])
+        server_name = format_text(name, STYLE["detector"])
+        click.echo(f"{start} {server_name}")
+
+        indent = "   "
+        scope = "user" if installed_globally else "project"
+        click.echo(f"{indent}{format_text('Scope:', STYLE['key'])} {scope}")
+        if projects:
+            click.echo(f"{indent}{format_text('Projects:', STYLE['key'])}")
+            for j, project in enumerate(projects):
+                connector = "└─" if j == len(projects) - 1 else "├─"
+                click.echo(f"{indent}{connector} {project}")
+
+    click.echo()

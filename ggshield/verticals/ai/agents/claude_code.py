@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import click
 
-from ..models import Agent, EventType, HookResult
+from ggshield.core.dirs import get_user_home_dir
+
+from ..models import Agent, EventType, HookResult, MCPConfiguration, Scope
 
 
 class Claude(Agent):
@@ -17,6 +19,10 @@ class Claude(Agent):
     @property
     def display_name(self) -> str:
         return "Claude Code"
+
+    @property
+    def config_folder(self) -> Path:
+        return get_user_home_dir() / ".claude"
 
     def output_result(self, result: HookResult) -> int:
         response = {}
@@ -106,3 +112,38 @@ class Claude(Agent):
             if "ggshield" in command or "<COMMAND>" in command:
                 return obj
         return None
+
+    def project_mcp_file(self, directory: Path) -> Path:
+        return directory / ".mcp.json"
+
+    def _get_user_mcp_configurations(self) -> Iterator[MCPConfiguration]:
+        """Look into ~/.claude.json for both user-level and project-level MCP server entries."""
+        # Load config file
+        filepath = get_user_home_dir() / ".claude.json"
+        if not (data := self._load_json_file(filepath)):
+            return
+
+        # User-level mcpServers
+        yield from self._parse_servers_block(data, Scope.USER, None)
+
+        # Per-project entries in projects dict
+        projects = data.get("projects", {})
+        if not isinstance(projects, dict):
+            return
+        for project_key, project_data in projects.items():
+            if not isinstance(project_data, dict):
+                continue
+            yield from self._parse_servers_block(
+                project_data, Scope.USER, Path(project_key)
+            )
+
+    def discover_project_directories(self) -> Iterator[Path]:
+        """Discover project directories by scraping config files."""
+        history_file = self.config_folder / "history.jsonl"
+        projects = set()
+        for line in self._load_jsonl_file(history_file):
+            if "project" in line:
+                projects.add(Path(line["project"]))
+        for project in projects:
+            if project.is_dir():
+                yield project.resolve()

@@ -1,0 +1,411 @@
+import json
+from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock, patch
+
+import click
+from click.testing import CliRunner
+from pygitguardian.models import AIDiscovery, MCPConfiguration, MCPServer, UserInfo
+
+from ggshield.__main__ import cli
+from ggshield.cmd.ai.discover import print_summary
+from ggshield.core.errors import APIKeyCheckError
+from ggshield.verticals.ai.models import Scope, Transport
+
+
+def _user():
+    return UserInfo(
+        hostname="host", username="user", machine_id="mid", user_email="u@e.com"
+    )
+
+
+def _discovery(servers: Optional[List[MCPServer]] = None):
+    return AIDiscovery(user=_user(), servers=servers or [], discovery_duration=0.1)
+
+
+def _server(
+    name: str,
+    display_name: Optional[str] = None,
+    configurations: Optional[List[MCPConfiguration]] = None,
+) -> MCPServer:
+    return MCPServer(
+        name=name,
+        display_name=display_name,
+        configurations=configurations or [],
+    )
+
+
+def _config(
+    name: str = "srv",
+    agent: str = "cursor",
+    scope: Scope = Scope.PROJECT,
+    project: Optional[str] = None,
+) -> MCPConfiguration:
+    return MCPConfiguration(
+        name=name,
+        agent=agent,
+        scope=scope,
+        transport=Transport.STDIO,
+        project=project,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ggshield secret scan ai-hook
+# ---------------------------------------------------------------------------
+
+
+class TestAiHookCmd:
+    @patch("ggshield.cmd.secret.scan.ai_hook.AIHookScanner")
+    @patch("ggshield.cmd.secret.scan.ai_hook.SecretScanner")
+    @patch("ggshield.cmd.secret.scan.ai_hook.create_client_from_config")
+    def test_valid_json_stdin(
+        self,
+        mock_client: MagicMock,
+        mock_scanner_cls: MagicMock,
+        mock_hook_scanner: MagicMock,
+    ):
+        instance = mock_hook_scanner.return_value
+        instance.scan.return_value = 0
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["secret", "scan", "ai-hook"],
+            input='{"event_type": "test"}',
+        )
+
+        assert result.exit_code == 0
+        instance.scan.assert_called_once()
+
+    @patch("ggshield.cmd.secret.scan.ai_hook.AIHookScanner")
+    @patch("ggshield.cmd.secret.scan.ai_hook.SecretScanner")
+    @patch("ggshield.cmd.secret.scan.ai_hook.create_client_from_config")
+    def test_empty_stdin_returns_error(
+        self,
+        mock_client: MagicMock,
+        mock_scanner_cls: MagicMock,
+        mock_hook_scanner: MagicMock,
+    ):
+        instance = mock_hook_scanner.return_value
+        instance.scan.side_effect = ValueError("Empty input")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["secret", "scan", "ai-hook"],
+            input="",
+        )
+
+        assert result.exit_code == 1
+
+    @patch("ggshield.cmd.secret.scan.ai_hook.AIHookScanner")
+    @patch("ggshield.cmd.secret.scan.ai_hook.SecretScanner")
+    @patch("ggshield.cmd.secret.scan.ai_hook.create_client_from_config")
+    def test_large_stdin_does_not_crash(
+        self,
+        mock_client: MagicMock,
+        mock_scanner_cls: MagicMock,
+        mock_hook_scanner: MagicMock,
+    ):
+        instance = mock_hook_scanner.return_value
+        instance.scan.return_value = 0
+
+        runner = CliRunner()
+        large_input = "x" * (1024 * 1024)  # 1 MB
+        result = runner.invoke(
+            cli,
+            ["secret", "scan", "ai-hook"],
+            input=large_input,
+        )
+
+        assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# ggshield ai discover
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverCmd:
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+        return_value=_discovery(),
+    )
+    @patch("ggshield.cmd.ai.discover.create_client_from_config")
+    @patch(
+        "ggshield.cmd.ai.discover.submit_ai_discovery",
+        return_value=_discovery(),
+    )
+    @patch("ggshield.cmd.ai.discover.save_discovery_cache")
+    def test_default_output(
+        self,
+        mock_save: MagicMock,
+        mock_submit: MagicMock,
+        mock_client: MagicMock,
+        mock_discover: MagicMock,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover"])
+
+        assert result.exit_code == 0
+        mock_discover.assert_called_once()
+
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+        return_value=_discovery(),
+    )
+    @patch("ggshield.cmd.ai.discover.create_client_from_config")
+    @patch(
+        "ggshield.cmd.ai.discover.submit_ai_discovery",
+        return_value=_discovery(),
+    )
+    @patch("ggshield.cmd.ai.discover.save_discovery_cache")
+    def test_json_flag(
+        self,
+        mock_save: MagicMock,
+        mock_submit: MagicMock,
+        mock_client: MagicMock,
+        mock_discover: MagicMock,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover", "--json"])
+
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert "agents" in parsed
+        assert "servers" in parsed
+
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+        return_value=_discovery(),
+    )
+    @patch(
+        "ggshield.cmd.ai.discover.create_client_from_config",
+        side_effect=APIKeyCheckError("https://api.gitguardian.com", "no key"),
+    )
+    def test_auth_failure_shows_warning(
+        self, mock_client: MagicMock, mock_discover: MagicMock
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover"])
+
+        assert result.exit_code == 0
+        assert "Skipping upload" in result.output or "warning" in result.output.lower()
+
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+        return_value=_discovery(),
+    )
+    @patch("ggshield.cmd.ai.discover.create_client_from_config")
+    @patch(
+        "ggshield.cmd.ai.discover.submit_ai_discovery",
+        side_effect=RuntimeError("API error"),
+    )
+    def test_api_submission_failure_shows_warning(
+        self, mock_submit: MagicMock, mock_client: MagicMock, mock_discover: MagicMock
+    ):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover"])
+
+        assert result.exit_code == 0
+        assert "Could not upload" in result.output or "warning" in result.output.lower()
+
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+    )
+    @patch("ggshield.cmd.ai.discover.create_client_from_config")
+    @patch(
+        "ggshield.cmd.ai.discover.submit_ai_discovery",
+    )
+    @patch("ggshield.cmd.ai.discover.save_discovery_cache")
+    def test_text_output_with_servers(
+        self,
+        mock_save: MagicMock,
+        mock_submit: MagicMock,
+        mock_client: MagicMock,
+        mock_discover: MagicMock,
+    ):
+        """Text output lists agents, servers, scope, and projects."""
+        discovery = _discovery(
+            servers=[
+                _server(
+                    "my-mcp",
+                    display_name="My MCP",
+                    configurations=[
+                        _config(
+                            agent="cursor",
+                            scope=Scope.USER,
+                        ),
+                    ],
+                ),
+                _server(
+                    "project-srv",
+                    display_name="Project Server",
+                    configurations=[
+                        _config(
+                            agent="cursor",
+                            scope=Scope.PROJECT,
+                            project="/home/user/project-a",
+                        ),
+                        _config(
+                            agent="cursor",
+                            scope=Scope.PROJECT,
+                            project="/home/user/project-b",
+                        ),
+                    ],
+                ),
+            ]
+        )
+        mock_discover.return_value = discovery
+        mock_submit.return_value = discovery
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover"])
+
+        assert result.exit_code == 0
+        assert "Cursor" in result.output
+        assert "2 servers" in result.output
+        assert "My MCP" in result.output
+        assert "Scope: user" in result.output
+        assert "Project Server" in result.output
+        assert "Scope: project" in result.output
+        assert "/home/user/project-a" in result.output
+        assert "/home/user/project-b" in result.output
+
+    @patch(
+        "ggshield.cmd.ai.discover.discover_ai_configuration",
+    )
+    @patch("ggshield.cmd.ai.discover.create_client_from_config")
+    @patch(
+        "ggshield.cmd.ai.discover.submit_ai_discovery",
+    )
+    @patch("ggshield.cmd.ai.discover.save_discovery_cache")
+    def test_json_output_with_servers(
+        self,
+        mock_save: MagicMock,
+        mock_submit: MagicMock,
+        mock_client: MagicMock,
+        mock_discover: MagicMock,
+    ):
+        """JSON output contains structured data for agents and servers."""
+        discovery = _discovery(
+            servers=[
+                _server(
+                    "my-mcp",
+                    display_name="My MCP",
+                    configurations=[
+                        _config(agent="cursor", scope=Scope.USER),
+                    ],
+                ),
+            ]
+        )
+        mock_discover.return_value = discovery
+        mock_submit.return_value = discovery
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["ai", "discover", "--json"])
+
+        assert result.exit_code == 0
+        parsed = json.loads(result.output)
+        assert parsed["agents"] == ["Cursor"]
+        assert len(parsed["servers"]) == 1
+        assert parsed["servers"][0]["name"] == "My MCP"
+        assert parsed["servers"][0]["installed_globally"] is True
+
+
+# ---------------------------------------------------------------------------
+# print_summary (unit tests)
+# ---------------------------------------------------------------------------
+
+
+class TestPrintSummary:
+    def test_empty_servers(self):
+        """No servers: prints a 'no servers' message."""
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                _echo_summary_cmd,
+                args=[],
+                input=json.dumps({"agents": [], "servers": []}),
+            )
+        assert "No MCP servers discovered" in result.output
+
+    def test_single_global_server(self):
+        summary: Dict[str, Any] = {
+            "agents": ["Cursor"],
+            "servers": [
+                {
+                    "name": "my-server",
+                    "installed_globally": True,
+                    "projects": [],
+                }
+            ],
+        }
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                _echo_summary_cmd, args=[], input=json.dumps(summary)
+            )
+        assert "1 server" in result.output
+        assert "1 agent" in result.output
+        assert "my-server" in result.output
+        assert "Scope: user" in result.output
+
+    def test_multiple_servers_with_projects(self):
+        summary: Dict[str, Any] = {
+            "agents": ["Cursor", "Claude Code"],
+            "servers": [
+                {
+                    "name": "server-a",
+                    "installed_globally": False,
+                    "projects": ["/path/to/proj1", "/path/to/proj2"],
+                },
+                {
+                    "name": "server-b",
+                    "installed_globally": True,
+                    "projects": [],
+                },
+            ],
+        }
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                _echo_summary_cmd, args=[], input=json.dumps(summary)
+            )
+        output = result.output
+        assert "2 servers" in output
+        assert "2 agents" in output
+        assert "server-a" in output
+        assert "server-b" in output
+        assert "/path/to/proj1" in output
+        assert "/path/to/proj2" in output
+        assert "├─" in output
+        assert "└─" in output
+
+    def test_server_name_fallback(self):
+        """Servers with missing name get 'unknown'."""
+        summary: Dict[str, Any] = {
+            "agents": [],
+            "servers": [
+                {
+                    "installed_globally": False,
+                    "projects": [],
+                }
+            ],
+        }
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                _echo_summary_cmd, args=[], input=json.dumps(summary)
+            )
+        assert "unknown" in result.output
+
+
+@click.command()
+@click.pass_context
+def _echo_summary_cmd(ctx: click.Context) -> None:
+    """Helper command that reads a summary from stdin and prints it."""
+    import sys
+
+    data = json.load(sys.stdin)
+    print_summary(data)
